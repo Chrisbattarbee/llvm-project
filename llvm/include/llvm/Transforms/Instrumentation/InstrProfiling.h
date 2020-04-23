@@ -50,6 +50,9 @@ private:
   struct PerFunctionProfileData {
     uint32_t NumValueSites[IPVK_Last + 1];
     GlobalVariable *RegionCounters = nullptr;
+    GlobalVariable *LastIdCounters = nullptr;
+    GlobalVariable *SameTakenCounters = nullptr;
+    GlobalVariable *NotSameTakenCounters = nullptr;
     GlobalVariable *DataVar = nullptr;
 
     PerFunctionProfileData() {
@@ -97,6 +100,9 @@ private:
   /// Replace instrprof_increment with an increment of the appropriate value.
   void lowerIncrement(InstrProfIncrementInst *Inc);
 
+  /// Replace clusteredness update with an update of the appropriate values.
+  bool lowerClusterednessUpdate(InstrProfClusterednessUpdate *pUpdate);
+
   /// Force emitting of name vars for unused functions.
   void lowerCoverageData(GlobalVariable *CoverageNamesVar);
 
@@ -125,7 +131,17 @@ private:
   /// Create a static initializer for our data, on platforms that need it,
   /// and for any profile output file that was specified.
   void emitInitialization();
+
+  /// Get the clusteredness last id counters for an update, creating them if necessary.
+  GlobalVariable * getOrCreateClusterednessLastIdCounters(InstrProfClusterednessUpdate *Cluster);
+
+  /// Get the clusteredness same counters for an update, creating them if necessary.
+  GlobalVariable * getOrCreateClusterednessSameCounters(InstrProfClusterednessUpdate *Cluster);
+
+  /// Get the clusteredness not same counters for an update, creating them if necessary.
+  GlobalVariable * getOrCreateClusterednessNotSameCounters(InstrProfClusterednessUpdate *Cluster);
 };
+
 
 } // end namespace llvm
 

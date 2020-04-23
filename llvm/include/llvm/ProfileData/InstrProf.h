@@ -87,6 +87,15 @@ inline StringRef getInstrProfDataVarPrefix() { return "__profd_"; }
 /// Return the name prefix of profile counter variables.
 inline StringRef getInstrProfCountersVarPrefix() { return "__profc_"; }
 
+/// Return the name prefix of profile  variables.
+inline StringRef getClusterednessLastIdCountersVarPrefix() { return "__clus_lid_"; }
+
+/// Return the name prefix of profile counter variables.
+inline StringRef getClusterednessSameCountersVarPrefix() { return "__clus_same_"; }
+
+/// Return the name prefix of profile counter variables.
+inline StringRef getClusterednessNotSameCountersVarPrefix() { return "__clus_not_same_"; }
+
 /// Return the name prefix of value profile variables.
 inline StringRef getInstrProfValuesVarPrefix() { return "__profvp_"; }
 
