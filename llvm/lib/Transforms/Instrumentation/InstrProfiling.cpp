@@ -148,9 +148,8 @@ cl::opt<bool> IterativeCounterPromotion(
     cl::ZeroOrMore, "iterative-counter-promotion", cl::init(true),
     cl::desc("Allow counter promotion across the whole loop nest."));
 
-
 /// Get the name of a profiling variable for a particular function.
-template<class InstructionInstance>
+template <class InstructionInstance>
 static std::string getVarName(InstructionInstance *Instr, StringRef Prefix) {
   StringRef NamePrefix = getInstrProfNameVarPrefix();
   StringRef Name = Instr->getName()->getName().substr(NamePrefix.size());
@@ -528,7 +527,7 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessLastIdCounters(
       getVarName(Cluster, getClusterednessLastIdCountersVarPrefix()));
   LastIdCounterPtr->setVisibility(Visibility);
   LastIdCounterPtr->setSection(
-      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
+      getInstrProfSectionName(IPSK_clus_last_id, TT.getObjectFormat()));
   LastIdCounterPtr->setAlignment(Align(8));
   MaybeSetComdat(LastIdCounterPtr);
   LastIdCounterPtr->setLinkage(Linkage);
@@ -541,7 +540,10 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessLastIdCounters(
   // it can be removed later by the compiler.
   NamePtr->setLinkage(GlobalValue::PrivateLinkage);
   // Collect the referenced names to be used by emitNameData.
-  ReferencedNames.push_back(NamePtr);
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) !=
+      ReferencedNames.end()) {
+    ReferencedNames.push_back(NamePtr);
+  }
 
   return LastIdCounterPtr;
 }
@@ -600,7 +602,7 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessSameCounters(
       getVarName(Cluster, getClusterednessSameCountersVarPrefix()));
   SameCounterPtr->setVisibility(Visibility);
   SameCounterPtr->setSection(
-      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
+      getInstrProfSectionName(IPSK_clus_same, TT.getObjectFormat()));
   SameCounterPtr->setAlignment(Align(8));
   MaybeSetComdat(SameCounterPtr);
   SameCounterPtr->setLinkage(Linkage);
@@ -613,7 +615,10 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessSameCounters(
   // it can be removed later by the compiler.
   NamePtr->setLinkage(GlobalValue::PrivateLinkage);
   // Collect the referenced names to be used by emitNameData.
-  ReferencedNames.push_back(NamePtr);
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) !=
+      ReferencedNames.end()) {
+    ReferencedNames.push_back(NamePtr);
+  }
 
   return SameCounterPtr;
 }
@@ -672,7 +677,7 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessNotSameCounters(
       getVarName(Cluster, getClusterednessNotSameCountersVarPrefix()));
   NotSameCounters->setVisibility(Visibility);
   NotSameCounters->setSection(
-      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
+      getInstrProfSectionName(IPSK_clus_notsame, TT.getObjectFormat()));
   NotSameCounters->setAlignment(Align(8));
   MaybeSetComdat(NotSameCounters);
   NotSameCounters->setLinkage(Linkage);
@@ -685,7 +690,10 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessNotSameCounters(
   // it can be removed later by the compiler.
   NamePtr->setLinkage(GlobalValue::PrivateLinkage);
   // Collect the referenced names to be used by emitNameData.
-  ReferencedNames.push_back(NamePtr);
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) !=
+      ReferencedNames.end()) {
+    ReferencedNames.push_back(NamePtr);
+  }
 
   return NotSameCounters;
 }
@@ -696,10 +704,9 @@ bool InstrProfiling::lowerClusterednessUpdate(
     InstrProfClusterednessUpdate *Cluster) {
   GlobalVariable *LastIdCounters =
       getOrCreateClusterednessLastIdCounters(Cluster);
-  GlobalVariable *SameCounters =
-      getOrCreateClusterednessLastIdCounters(Cluster);
+  GlobalVariable *SameCounters = getOrCreateClusterednessSameCounters(Cluster);
   GlobalVariable *NotSameCounters =
-      getOrCreateClusterednessLastIdCounters(Cluster);
+      getOrCreateClusterednessNotSameCounters(Cluster);
 
   IRBuilder<> Builder(Cluster);
   uint64_t ParentIndex = Cluster->getParentIndex()->getZExtValue();
@@ -804,6 +811,10 @@ static bool containsProfilingIntrinsics(Module &M) {
       return true;
   if (auto *F = M.getFunction(
           Intrinsic::getName(llvm::Intrinsic::instrprof_value_profile)))
+    if (!F->use_empty())
+      return true;
+  if (auto *F = M.getFunction(
+          Intrinsic::getName(llvm::Intrinsic::instrprof_clusteredness_update)))
     if (!F->use_empty())
       return true;
   return false;
@@ -1187,7 +1198,11 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
   // it can be removed later by the compiler.
   NamePtr->setLinkage(GlobalValue::PrivateLinkage);
   // Collect the referenced names to be used by emitNameData.
-  ReferencedNames.push_back(NamePtr);
+
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) !=
+      ReferencedNames.end()) {
+    ReferencedNames.push_back(NamePtr);
+  }
 
   return CounterPtr;
 }

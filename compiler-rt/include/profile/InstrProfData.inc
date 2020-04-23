@@ -255,6 +255,15 @@ INSTR_PROF_SECT_ENTRY(IPSK_data, \
 INSTR_PROF_SECT_ENTRY(IPSK_cnts, \
                       INSTR_PROF_QUOTE(INSTR_PROF_CNTS_COMMON), \
                       INSTR_PROF_CNTS_COFF, "__DATA,")
+INSTR_PROF_SECT_ENTRY(IPSK_clus_last_id, \
+                      INSTR_PROF_QUOTE(INSTR_PROF_CLUS_LASTID_COMMON), \
+                      INSTR_PROF_CNTS_COFF, "__DATA,")
+INSTR_PROF_SECT_ENTRY(IPSK_clus_same, \
+                      INSTR_PROF_QUOTE(INSTR_PROF_CLUS_SAME_COMMON), \
+                      INSTR_PROF_CNTS_COFF, "__DATA,")
+INSTR_PROF_SECT_ENTRY(IPSK_clus_notsame, \
+                      INSTR_PROF_QUOTE(INSTR_PROF_CLUS_NOTSAME_COMMON), \
+                      INSTR_PROF_CNTS_COFF, "__DATA,")
 INSTR_PROF_SECT_ENTRY(IPSK_name, \
                       INSTR_PROF_QUOTE(INSTR_PROF_NAME_COMMON), \
                       INSTR_PROF_NAME_COFF, "__DATA,")
@@ -658,6 +667,9 @@ serializeValueProfDataFrom(ValueProfRecordClosure *Closure,
 #define INSTR_PROF_DATA_COMMON __llvm_prf_data
 #define INSTR_PROF_NAME_COMMON __llvm_prf_names
 #define INSTR_PROF_CNTS_COMMON __llvm_prf_cnts
+#define INSTR_PROF_CLUS_LASTID_COMMON __llvm_prf_clus_lastid
+#define INSTR_PROF_CLUS_SAME_COMMON __llvm_prf_clus_same
+#define INSTR_PROF_CLUS_NOTSAME_COMMON __llvm_prf_clas_notsame
 #define INSTR_PROF_VALS_COMMON __llvm_prf_vals
 #define INSTR_PROF_VNODES_COMMON __llvm_prf_vnds
 #define INSTR_PROF_COVMAP_COMMON __llvm_covmap

@@ -507,8 +507,8 @@ def int_instrprof_value_profile : Intrinsic<[],
 
 // A counter increment for instrumentation based profiling.
 def int_instrprof_clusteredness_update : Intrinsic<[],
-                                        [llvm_ptr_ty, llvm_i32_ty,
-                                         llvm_i32_ty, llvm_i32_ty,
+                                        [llvm_ptr_ty, llvm_i64_ty,
+                                         llvm_i64_ty, llvm_i64_ty,
                                          llvm_i64_ty
                                          ],
                                         []>;

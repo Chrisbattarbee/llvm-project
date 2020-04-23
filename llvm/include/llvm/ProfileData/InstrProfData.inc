@@ -255,6 +255,15 @@ INSTR_PROF_SECT_ENTRY(IPSK_data, \
 INSTR_PROF_SECT_ENTRY(IPSK_cnts, \
                       INSTR_PROF_QUOTE(INSTR_PROF_CNTS_COMMON), \
                       INSTR_PROF_CNTS_COFF, "__DATA,")
+INSTR_PROF_SECT_ENTRY(IPSK_clus_last_id, \
+                      INSTR_PROF_QUOTE(INSTR_PROF_CLUS_LASTID_COMMON), \
+                      INSTR_PROF_CNTS_COFF, "__DATA,")
+INSTR_PROF_SECT_ENTRY(IPSK_clus_same, \
+                      INSTR_PROF_QUOTE(INSTR_PROF_CLUS_SAME_COMMON), \
+                      INSTR_PROF_CNTS_COFF, "__DATA,")
+INSTR_PROF_SECT_ENTRY(IPSK_clus_notsame, \
+                      INSTR_PROF_QUOTE(INSTR_PROF_CLUS_NOTSAME_COMMON), \
+                      INSTR_PROF_CNTS_COFF, "__DATA,")
 INSTR_PROF_SECT_ENTRY(IPSK_name, \
                       INSTR_PROF_QUOTE(INSTR_PROF_NAME_COMMON), \
                       INSTR_PROF_NAME_COFF, "__DATA,")

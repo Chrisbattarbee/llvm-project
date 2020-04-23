@@ -890,6 +890,7 @@ static void instrumentOneFunc(
     Function &F, Module *M, BranchProbabilityInfo *BPI, BlockFrequencyInfo *BFI,
     std::unordered_multimap<Comdat *, GlobalValue *> &ComdatMembers,
     bool IsCS) {
+  std::cout << "Instrumenting function " << F.getName().str() << std::endl;
   // Split indirectbr critical edges here before computing the MST rather than
   // later in getInstrBB() to avoid invalidating it.
   SplitIndirectBrCriticalEdges(F, BPI, BFI);
@@ -941,8 +942,11 @@ static void instrumentOneFunc(
                                // when this is implemented as is seen above
 
   I8PtrTy = Type::getInt8PtrTy(M->getContext());
-  for (auto *InstrBB : InstrumentBBs) {
+  for (auto *InstrBB : AllBBs) {
     for (const auto *Parent : FuncInfo.getParents(InstrBB)) {
+      if (!Parent) {
+        continue;
+      }
       IRBuilder<> Builder(InstrBB, InstrBB->getFirstInsertionPt());
       assert(Builder.GetInsertPoint() != InstrBB->end() &&
              "Cannot get the Instrumentation point");
@@ -950,12 +954,13 @@ static void instrumentOneFunc(
       int ParentId = BasicBlockLabelMap.at(Parent);
       int SelfId = BasicBlockLabelMap.at(InstrBB);
       Builder.CreateCall(
-          Intrinsic::getDeclaration(M, Intrinsic::instrprof_increment),
+          Intrinsic::getDeclaration(M, Intrinsic::instrprof_clusteredness_update),
           {
               ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
-              Builder.getInt32(NumCounters),
-              Builder.getInt32(ParentId),
-              Builder.getInt32(SelfId)
+              Builder.getInt64(NumCounters),
+              Builder.getInt64(ParentId),
+              Builder.getInt64(SelfId),
+              Builder.getInt64(FuncInfo.FunctionHash)
           });
     }
   }
