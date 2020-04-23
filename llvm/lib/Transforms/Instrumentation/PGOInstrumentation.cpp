@@ -120,6 +120,7 @@
 #include <numeric>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -359,7 +360,6 @@ struct SelectInstVisitor : public InstVisitor<SelectInstVisitor> {
   unsigned getNumOfSelectInsts() const { return NSIs; }
 };
 
-
 class PGOInstrumentationGenLegacyPass : public ModulePass {
 public:
   static char ID;
@@ -495,7 +495,8 @@ struct PGOEdge {
   // Return the information string of an edge.
   const std::string infoString() const {
     return (Twine(Removed ? "-" : " ") + (InMST ? " " : "*") +
-            (IsCritical ? "c" : " ") + "  W=" + Twine(Weight)).str();
+            (IsCritical ? "c" : " ") + "  W=" + Twine(Weight))
+        .str();
   }
 };
 
@@ -551,9 +552,25 @@ public:
   // InstrumentBBs.
   void getInstrumentBBs(std::vector<BasicBlock *> &InstrumentBBs);
 
+  // Get all the BBs, used for clusteredness
+  void getAllBBs(std::vector<BasicBlock *> &InstrumentBBs);
+
+  // Should only be called after the CFG is constructed
+  // Will return all of the BasicBlocks which are the logical parents of the
+  // provided Child
+  std::unordered_set<const BasicBlock *> getParents(BasicBlock *Child) {
+    std::unordered_set<const BasicBlock *> Parents;
+    for (auto &E : MST.AllEdges) {
+      if (E->DestBB == Child) {
+        Parents.insert(E->SrcBB);
+      }
+    }
+    return Parents;
+  }
+
   // Give an edge, find the BB that will be instrumented.
   // Return nullptr if there is no BB to be instrumented.
-  BasicBlock *getInstrBB(Edge *E);
+  BasicBlock *getInstrBB(Edge *E, bool RemoveIfMST = true);
 
   // Return the auxiliary BB information.
   BBInfo &getBBInfo(const BasicBlock *BB) const { return MST.getBBInfo(BB); }
@@ -563,8 +580,8 @@ public:
 
   // Dump edges and BB information.
   void dumpInfo(std::string Str = "") const {
-    MST.dumpEdges(dbgs(), Twine("Dump Function ") + FuncName + " Hash: " +
-                              Twine(FunctionHash) + "\t" + Str);
+    MST.dumpEdges(dbgs(), Twine("Dump Function ") + FuncName +
+                              " Hash: " + Twine(FunctionHash) + "\t" + Str);
   }
 
   FuncPGOInstrumentation(
@@ -749,12 +766,46 @@ void FuncPGOInstrumentation<Edge, BBInfo>::getInstrumentBBs(
   }
 }
 
+template <class Edge, class BBInfo>
+void FuncPGOInstrumentation<Edge, BBInfo>::getAllBBs(
+    std::vector<BasicBlock *> &InstrumentBBs) {
+  // Use a worklist as we will update the vector during the iteration.
+  std::vector<Edge *> EdgeList;
+  EdgeList.reserve(MST.AllEdges.size());
+  for (auto &E : MST.AllEdges)
+    EdgeList.push_back(E.get());
+
+  for (auto &E : EdgeList) {
+    BasicBlock *InstrBB = getInstrBB(E, false);
+    if (InstrBB)
+      InstrumentBBs.push_back(InstrBB);
+  }
+
+  // Set up InEdges/OutEdges for all BBs.
+  for (auto &E : MST.AllEdges) {
+    if (E->Removed)
+      continue;
+    const BasicBlock *SrcBB = E->SrcBB;
+    const BasicBlock *DestBB = E->DestBB;
+    BBInfo &SrcInfo = getBBInfo(SrcBB);
+    BBInfo &DestInfo = getBBInfo(DestBB);
+    SrcInfo.addOutEdge(E.get());
+    DestInfo.addInEdge(E.get());
+  }
+}
+
 // Given a CFG E to be instrumented, find which BB to place the instrumented
 // code. The function will split the critical edge if necessary.
 template <class Edge, class BBInfo>
-BasicBlock *FuncPGOInstrumentation<Edge, BBInfo>::getInstrBB(Edge *E) {
-  if (E->InMST || E->Removed)
+BasicBlock *FuncPGOInstrumentation<Edge, BBInfo>::getInstrBB(Edge *E,
+                                                             bool RemoveIfMST) {
+  if (E->Removed) {
     return nullptr;
+  }
+
+  if (RemoveIfMST && E->InMST) {
+    return nullptr;
+  }
 
   BasicBlock *SrcBB = const_cast<BasicBlock *>(E->SrcBB);
   BasicBlock *DestBB = const_cast<BasicBlock *>(E->DestBB);
@@ -867,6 +918,49 @@ static void instrumentOneFunc(
   FuncInfo.SIVisitor.instrumentSelects(F, &I, NumCounters, FuncInfo.FuncNameVar,
                                        FuncInfo.FunctionHash);
   assert(I == NumCounters);
+
+  // Clusteredness
+  std::vector<BasicBlock *> AllBBs;
+  FuncInfo.getAllBBs(AllBBs);
+
+  // Remove duplicates
+  std::unordered_set<BasicBlock *> DuplicateRemoverSet(AllBBs.begin(),
+                                                       AllBBs.end());
+  AllBBs.clear();
+  AllBBs = std::vector<BasicBlock *>(DuplicateRemoverSet.begin(),
+                                     DuplicateRemoverSet.end());
+
+  // Assign each basic block to a unique id
+  std::unordered_map<const BasicBlock *, int> BasicBlockLabelMap;
+  I = 0;
+  for (auto *BB : AllBBs) {
+    BasicBlockLabelMap[BB] = I++;
+  }
+
+  NumCounters = AllBBs.size(); // TODO Should also have the num of selects too
+                               // when this is implemented as is seen above
+
+  I8PtrTy = Type::getInt8PtrTy(M->getContext());
+  for (auto *InstrBB : InstrumentBBs) {
+    for (const auto *Parent : FuncInfo.getParents(InstrBB)) {
+      IRBuilder<> Builder(InstrBB, InstrBB->getFirstInsertionPt());
+      assert(Builder.GetInsertPoint() != InstrBB->end() &&
+             "Cannot get the Instrumentation point");
+
+      int ParentId = BasicBlockLabelMap.at(Parent);
+      int SelfId = BasicBlockLabelMap.at(InstrBB);
+      Builder.CreateCall(
+          Intrinsic::getDeclaration(M, Intrinsic::instrprof_increment),
+          {
+              ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
+              Builder.getInt32(NumCounters),
+              Builder.getInt32(ParentId),
+              Builder.getInt32(SelfId)
+          });
+    }
+  }
+
+  // TODO: Deal with select instructions as we see above
 
   if (DisableValueProfiling)
     return;
@@ -1049,11 +1143,10 @@ public:
 
   Function &getFunc() const { return F; }
 
-  void dumpInfo(std::string Str = "") const {
-    FuncInfo.dumpInfo(Str);
-  }
+  void dumpInfo(std::string Str = "") const { FuncInfo.dumpInfo(Str); }
 
   uint64_t getProgramMaxCount() const { return ProgramMaxCount; }
+
 private:
   Function &F;
   Module *M;
@@ -1184,7 +1277,8 @@ void PGOUseFunc::setEdgeCount(DirectEdges &Edges, uint64_t Value) {
 // Read the profile from ProfileFileName and assign the value to the
 // instrumented BB and the edges. This function also updates ProgramMaxCount.
 // Return true if the profile are successfully read, and false on errors.
-bool PGOUseFunc::readCounters(IndexedInstrProfReader *PGOReader, bool &AllZeros) {
+bool PGOUseFunc::readCounters(IndexedInstrProfReader *PGOReader,
+                              bool &AllZeros) {
   auto &Ctx = M->getContext();
   Expected<InstrProfRecord> Result =
       PGOReader->getInstrProfRecord(FuncInfo.FuncName, FuncInfo.FunctionHash);
@@ -1244,8 +1338,9 @@ bool PGOUseFunc::readCounters(IndexedInstrProfReader *PGOReader, bool &AllZeros)
         dbgs() << "Inconsistent number of counts, skipping this function");
     Ctx.diagnose(DiagnosticInfoPGOProfile(
         M->getName().data(),
-        Twine("Inconsistent number of counts in ") + F.getName().str()
-        + Twine(": the profile may be stale or there is a function name collision."),
+        Twine("Inconsistent number of counts in ") + F.getName().str() +
+            Twine(": the profile may be stale or there is a function name "
+                  "collision."),
         DS_Warning));
     return false;
   }
@@ -1468,8 +1563,8 @@ void PGOUseFunc::annotateValueSites(uint32_t Kind) {
     Ctx.diagnose(DiagnosticInfoPGOProfile(
         M->getName().data(),
         Twine("Inconsistent number of value sites for ") +
-            Twine(ValueProfKindDescr[Kind]) +
-            Twine(" profiling in \"") + F.getName().str() +
+            Twine(ValueProfKindDescr[Kind]) + Twine(" profiling in \"") +
+            F.getName().str() +
             Twine("\", possibly due to the use of a stale profile."),
         DS_Warning));
     return;
@@ -1741,8 +1836,7 @@ static std::string getSimpleNodeName(const BasicBlock *Node) {
 }
 
 void llvm::setProfMetadata(Module *M, Instruction *TI,
-                           ArrayRef<uint64_t> EdgeCounts,
-                           uint64_t MaxCount) {
+                           ArrayRef<uint64_t> EdgeCounts, uint64_t MaxCount) {
   MDBuilder MDB(M->getContext());
   assert(MaxCount > 0 && "Bad max count");
   uint64_t Scale = calculateCountScale(MaxCount);
