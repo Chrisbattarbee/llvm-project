@@ -884,6 +884,10 @@ populateEHOperandBundle(VPCandidateInfo &Cand,
   }
 }
 
+bool compareBasicBlocks(BasicBlock* BB1, BasicBlock* BB2) {
+  return std::hash<std::string>{}(BB1->getName().str()) < std::hash<std::string>{}(BB2->getName().str());
+}
+
 // Visit all edge and instrument the edges not in MST, and do value profiling.
 // Critical edges will be split.
 static void instrumentOneFunc(
@@ -931,11 +935,15 @@ static void instrumentOneFunc(
   AllBBs = std::vector<BasicBlock *>(DuplicateRemoverSet.begin(),
                                      DuplicateRemoverSet.end());
 
+  // Sort the list of BBs so that the labelling is deterministic each time
+  // we create it
+  std::sort(AllBBs.begin(), AllBBs.end(), compareBasicBlocks);
+
   // Assign each basic block to a unique id
-  std::unordered_map<const BasicBlock *, int> BasicBlockLabelMap;
+  std::unordered_map<const BasicBlock *, uint64_t> BasicBlockLabelMap;
   I = 0;
   for (auto *BB : AllBBs) {
-    BasicBlockLabelMap[BB] = I++;
+    BasicBlockLabelMap[BB] = I ++;
   }
 
   NumCounters = AllBBs.size(); // TODO Should also have the num of selects too
