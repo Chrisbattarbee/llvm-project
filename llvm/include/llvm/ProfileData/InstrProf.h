@@ -90,6 +90,9 @@ inline StringRef getInstrProfCountersVarPrefix() { return "__profc_"; }
 /// Return the name prefix of profile  variables.
 inline StringRef getClusterednessLastIdCountersVarPrefix() { return "__clus_lid_"; }
 
+/// Return the name prefix of profile  variables.
+inline StringRef getCurrentBBCounterVarPrefix() { return "__current_bb_"; }
+
 /// Return the name prefix of profile counter variables.
 inline StringRef getClusterednessSameCountersVarPrefix() { return "__clus_same_"; }
 

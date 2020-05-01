@@ -53,6 +53,7 @@ private:
     GlobalVariable *LastIdCounters = nullptr;
     GlobalVariable *SameTakenCounters = nullptr;
     GlobalVariable *NotSameTakenCounters = nullptr;
+    GlobalVariable *CurrentBBCounter = nullptr;
     GlobalVariable *DataVar = nullptr;
 
     PerFunctionProfileData() {
@@ -103,6 +104,9 @@ private:
   /// Replace clusteredness update with an update of the appropriate values.
   bool lowerClusterednessUpdate(InstrProfClusterednessUpdate *pUpdate);
 
+  /// Replace current BB update with an update of the appropriate values.
+  bool lowerCurrentBBUpdate(InstrProfCurrentBBUpdate *BBUpdate);
+
   /// Force emitting of name vars for unused functions.
   void lowerCoverageData(GlobalVariable *CoverageNamesVar);
 
@@ -132,17 +136,24 @@ private:
   /// and for any profile output file that was specified.
   void emitInitialization();
 
-  /// Get the clusteredness last id counters for an update, creating them if necessary.
-  GlobalVariable * getOrCreateClusterednessLastIdCounters(InstrProfClusterednessUpdate *Cluster);
+  /// Get the clusteredness last id counters for an update, creating them if
+  /// necessary.
+  GlobalVariable *
+  getOrCreateClusterednessLastIdCounters(InstrProfClusterednessUpdate *Cluster);
 
-  /// Get the clusteredness same counters for an update, creating them if necessary.
-  GlobalVariable * getOrCreateClusterednessSameCounters(InstrProfClusterednessUpdate *Cluster);
+  /// Get the clusteredness same counters for an update, creating them if
+  /// necessary.
+  GlobalVariable *
+  getOrCreateClusterednessSameCounters(InstrProfClusterednessUpdate *Cluster);
 
-  /// Get the clusteredness not same counters for an update, creating them if necessary.
-  GlobalVariable * getOrCreateClusterednessNotSameCounters(InstrProfClusterednessUpdate *Cluster);
-};
+  /// Get the clusteredness not same counters for an update, creating them if
+  /// necessary.
+  GlobalVariable *getOrCreateClusterednessNotSameCounters(InstrProfClusterednessUpdate *Cluster);
 
-
+  // Get the BBCounter for a function, creating it if necessary
+  template <class InstrumentIntrinsic>
+  GlobalVariable *getOrCreateBBCounter(InstrumentIntrinsic *Instr);
+  };
 } // end namespace llvm
 
 #endif // LLVM_TRANSFORMS_INSTRPROFILING_H

@@ -458,9 +458,11 @@ bool InstrProfiling::lowerIntrinsics(Function *F) {
       } else if (auto *Ind = dyn_cast<InstrProfValueProfileInst>(Instr)) {
         lowerValueProfileInst(Ind);
         MadeChange = true;
-      } else if (auto *Cluster =
-                     dyn_cast<InstrProfClusterednessUpdate>(Instr)) {
+      } else if (auto *Cluster = dyn_cast<InstrProfClusterednessUpdate>(Instr)) {
         lowerClusterednessUpdate(Cluster);
+        MadeChange = true;
+      } else if (auto *BBUpdate = dyn_cast<InstrProfCurrentBBUpdate>(Instr)) {
+        lowerCurrentBBUpdate(BBUpdate);
         MadeChange = true;
       }
     }
@@ -471,6 +473,80 @@ bool InstrProfiling::lowerIntrinsics(Function *F) {
 
   promoteCounterLoadStores(F);
   return true;
+}
+
+template <class InstrumentIntrinsic>
+GlobalVariable *InstrProfiling::getOrCreateBBCounter(InstrumentIntrinsic *Instr) {
+  GlobalVariable *NamePtr = Instr->getName();
+  auto It = ProfileDataMap.find(NamePtr);
+  PerFunctionProfileData PD;
+  if (It != ProfileDataMap.end()) {
+    if (It->second.CurrentBBCounter)
+      return It->second.CurrentBBCounter;
+    PD = It->second;
+  }
+
+  // Match the linkage and visibility of the name global. COFF supports using
+  // comdats with internal symbols, so do that if we can.
+  Function *Fn = Instr->getParent()->getParent();
+  GlobalValue::LinkageTypes Linkage = NamePtr->getLinkage();
+  GlobalValue::VisibilityTypes Visibility = NamePtr->getVisibility();
+  if (TT.isOSBinFormatCOFF()) {
+    Linkage = GlobalValue::InternalLinkage;
+    Visibility = GlobalValue::DefaultVisibility;
+  }
+
+  // Move the name variable to the right section. Place them in a COMDAT group
+  // if the associated function is a COMDAT. This will make sure that only one
+  // copy of counters of the COMDAT function will be emitted after linking.
+  // Keep in mind that this pass may run before the inliner, so we need to
+  // create a new comdat group for the counters and profiling data. If we use
+  // the comdat of the parent function, that will result in relocations
+  // against discarded sections.
+  bool NeedComdat = needsComdatForCounter(*Fn, *M);
+  if (NeedComdat) {
+    if (TT.isOSBinFormatCOFF()) {
+      // For COFF, put the counters, data, and values each into their own
+      // comdats. We can't use a group because the Visual C++ linker will
+      // report duplicate symbol errors if there are multiple external symbols
+      // with the same name marked IMAGE_COMDAT_SELECT_ASSOCIATIVE.
+      Linkage = GlobalValue::LinkOnceODRLinkage;
+      Visibility = GlobalValue::HiddenVisibility;
+    }
+  }
+  auto MaybeSetComdat = [=](GlobalVariable *GV) {
+    if (NeedComdat)
+      GV->setComdat(M->getOrInsertComdat(GV->getName()));
+  };
+
+  LLVMContext &Ctx = M->getContext();
+  IntegerType *CounterTy = IntegerType::get(Ctx, 64);
+
+  // Create the counters variable.
+  auto *CurrentBBCounter = new GlobalVariable(
+      *M, CounterTy, false, Linkage, Constant::getNullValue(CounterTy),
+      getVarName(Instr, getCurrentBBCounterVarPrefix()));
+  CurrentBBCounter->setVisibility(Visibility);
+  CurrentBBCounter->setSection(
+      getInstrProfSectionName(IPSK_clus_last_id, TT.getObjectFormat()));
+  CurrentBBCounter->setAlignment(Align(8));
+  MaybeSetComdat(CurrentBBCounter);
+  CurrentBBCounter->setLinkage(Linkage);
+
+  PD.CurrentBBCounter = CurrentBBCounter;
+  ProfileDataMap[NamePtr] = PD;
+
+  // Now that the linkage set by the FE has been passed to the data and
+  // counter variables, reset Name variable's linkage and visibility to
+  // private so that it can be removed later by the compiler.
+  NamePtr->setLinkage(GlobalValue::PrivateLinkage);
+  // Collect the referenced names to be used by emitNameData.
+  // Make sure we aren't inserting duplicates because this will segfault later
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) !=
+      ReferencedNames.end()) {
+    ReferencedNames.push_back(NamePtr);
+  }
+  return CurrentBBCounter;
 }
 
 GlobalVariable *InstrProfiling::getOrCreateClusterednessLastIdCounters(
@@ -602,7 +678,7 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessSameCounters(
       getVarName(Cluster, getClusterednessSameCountersVarPrefix()));
   SameCounterPtr->setVisibility(Visibility);
   SameCounterPtr->setSection(
-      getInstrProfSectionName(IPSK_clus_same, TT.getObjectFormat()));
+      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
   SameCounterPtr->setAlignment(Align(8));
   MaybeSetComdat(SameCounterPtr);
   SameCounterPtr->setLinkage(Linkage);
@@ -677,7 +753,7 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessNotSameCounters(
       getVarName(Cluster, getClusterednessNotSameCountersVarPrefix()));
   NotSameCounters->setVisibility(Visibility);
   NotSameCounters->setSection(
-      getInstrProfSectionName(IPSK_clus_notsame, TT.getObjectFormat()));
+      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
   NotSameCounters->setAlignment(Align(8));
   MaybeSetComdat(NotSameCounters);
   NotSameCounters->setLinkage(Linkage);
@@ -707,17 +783,20 @@ bool InstrProfiling::lowerClusterednessUpdate(
   GlobalVariable *SameCounters = getOrCreateClusterednessSameCounters(Cluster);
   GlobalVariable *NotSameCounters =
       getOrCreateClusterednessNotSameCounters(Cluster);
+  GlobalVariable *BBCounter = getOrCreateBBCounter(Cluster);
 
   IRBuilder<> Builder(Cluster);
-  uint64_t ParentIndex = Cluster->getParentIndex()->getZExtValue();
-  IntegerType *Type = Cluster->getSelfIndex()->getType();
 
-  Value *ParentLastIdAddr = Builder.CreateConstInBoundsGEP2_64(
-      LastIdCounters->getValueType(), LastIdCounters, 0, ParentIndex);
-  Value *ParentSameAddress = Builder.CreateConstInBoundsGEP2_64(
-      SameCounters->getValueType(), SameCounters, 0, ParentIndex);
-  Value *ParentNotSameAddress = Builder.CreateConstInBoundsGEP2_64(
-      NotSameCounters->getValueType(), NotSameCounters, 0, ParentIndex);
+  Value *ParentIndex = Builder.CreateLoad(BBCounter->getValueType(), BBCounter);
+
+  IntegerType *Type = Cluster->getSelfIndex()->getType();
+  Value *ParentLastIdAddr = Builder.CreateInBoundsGEP(LastIdCounters, {ConstantInt::get(Type, 0), ParentIndex});
+  Value *ParentSameAddress = Builder.CreateInBoundsGEP(
+      SameCounters->getValueType(), SameCounters, {ConstantInt::get(Type, 0), ParentIndex});
+  Value *ParentNotSameAddress = Builder.CreateInBoundsGEP(
+      NotSameCounters->getValueType(), NotSameCounters, {ConstantInt::get(Type, 0), ParentIndex});
+
+//  Builder.CreateExt
 
   Value *LoadLastParentBranchValue =
       Builder.CreateLoad(Type, ParentLastIdAddr, "lastbranchvalue");
@@ -747,6 +826,14 @@ bool InstrProfiling::lowerClusterednessUpdate(
       Builder.CreateStore(Cluster->getSelfIndex(), ParentLastIdAddr);
 
   Cluster->eraseFromParent();
+  return true;
+}
+
+bool InstrProfiling::lowerCurrentBBUpdate(InstrProfCurrentBBUpdate * BBUpdate) {
+  GlobalVariable *BBCounter = getOrCreateBBCounter(BBUpdate);
+  IRBuilder<> Builder(BBUpdate);
+  Builder.CreateStore(BBUpdate->getBBLabel(), BBCounter);
+  BBUpdate->eraseFromParent();
   return true;
 }
 
@@ -815,6 +902,10 @@ static bool containsProfilingIntrinsics(Module &M) {
       return true;
   if (auto *F = M.getFunction(
           Intrinsic::getName(llvm::Intrinsic::instrprof_clusteredness_update)))
+      if (!F->use_empty())
+        return true;
+  if (auto *F = M.getFunction(Intrinsic::getName(
+      llvm::Intrinsic::instrprof_current_bb_update)))
     if (!F->use_empty())
       return true;
   return false;
@@ -1393,3 +1484,4 @@ void InstrProfiling::emitInitialization() {
 
   appendToGlobalCtors(*M, F, 0);
 }
+

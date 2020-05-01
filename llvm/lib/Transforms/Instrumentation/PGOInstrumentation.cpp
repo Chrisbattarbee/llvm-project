@@ -561,7 +561,7 @@ public:
   std::unordered_set<const BasicBlock *> getParents(BasicBlock *Child) {
     std::unordered_set<const BasicBlock *> Parents;
     for (auto &E : MST.AllEdges) {
-      if (E->DestBB == Child) {
+      if (E->DestBB == Child && E->SrcBB) {
         Parents.insert(E->SrcBB);
       }
     }
@@ -951,26 +951,31 @@ static void instrumentOneFunc(
 
   I8PtrTy = Type::getInt8PtrTy(M->getContext());
   for (auto *InstrBB : AllBBs) {
-    for (const auto *Parent : FuncInfo.getParents(InstrBB)) {
-      if (!Parent) {
-        continue;
-      }
-      IRBuilder<> Builder(InstrBB, InstrBB->getFirstInsertionPt());
-      assert(Builder.GetInsertPoint() != InstrBB->end() &&
-             "Cannot get the Instrumentation point");
+    int SelfId = BasicBlockLabelMap.at(InstrBB);
+    IRBuilder<> Builder(InstrBB, InstrBB->getFirstInsertionPt());
+    assert(Builder.GetInsertPoint() != InstrBB->end() &&
+           "Cannot get the Instrumentation point");
 
-      int ParentId = BasicBlockLabelMap.at(Parent);
-      int SelfId = BasicBlockLabelMap.at(InstrBB);
+    // If we have a parent then we want to update their clusteredness counts
+    // This has to be before the basic block update count
+    if (!FuncInfo.getParents(InstrBB).empty()) {
       Builder.CreateCall(
           Intrinsic::getDeclaration(M, Intrinsic::instrprof_clusteredness_update),
           {
               ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
               Builder.getInt64(NumCounters),
-              Builder.getInt64(ParentId),
               Builder.getInt64(SelfId),
               Builder.getInt64(FuncInfo.FunctionHash)
           });
     }
+    // Update the current basic block
+    Builder.CreateCall(
+        Intrinsic::getDeclaration(M, Intrinsic::instrprof_current_bb_update),
+        {
+            ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
+            Builder.getInt64(SelfId),
+            Builder.getInt64(FuncInfo.FunctionHash)
+        });
   }
 
   // TODO: Deal with select instructions as we see above
