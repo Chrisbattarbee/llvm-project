@@ -677,8 +677,10 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessSameCounters(
       *M, CounterTy, false, Linkage, Constant::getNullValue(CounterTy),
       getVarName(Cluster, getClusterednessSameCountersVarPrefix()));
   SameCounterPtr->setVisibility(Visibility);
+//  SameCounterPtr->setSection(
+//      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
   SameCounterPtr->setSection(
-      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
+      getInstrProfSectionName(IPSK_clus_same, TT.getObjectFormat()));
   SameCounterPtr->setAlignment(Align(8));
   MaybeSetComdat(SameCounterPtr);
   SameCounterPtr->setLinkage(Linkage);
@@ -752,8 +754,10 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessNotSameCounters(
       *M, CounterTy, false, Linkage, Constant::getNullValue(CounterTy),
       getVarName(Cluster, getClusterednessNotSameCountersVarPrefix()));
   NotSameCounters->setVisibility(Visibility);
+//  NotSameCounters->setSection(
+//      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
   NotSameCounters->setSection(
-      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
+      getInstrProfSectionName(IPSK_clus_notsame, TT.getObjectFormat()));
   NotSameCounters->setAlignment(Align(8));
   MaybeSetComdat(NotSameCounters);
   NotSameCounters->setLinkage(Linkage);
