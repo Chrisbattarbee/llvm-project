@@ -289,6 +289,8 @@ lprofWriteDataImpl(ProfDataWriter *Writer, const __llvm_profile_data *DataBegin,
       {NULL, sizeof(uint8_t), PaddingBytesAfterCounters, 1},
       {SkipNameDataWrite ? NULL : NamesBegin, sizeof(uint8_t), NamesSize, 0},
       {NULL, sizeof(uint8_t), PaddingBytesAfterNames, 1}};
+
+  // Write the data and if we get an error, return -1
   if (Writer->Write(Writer, IOVec, sizeof(IOVec) / sizeof(*IOVec)))
     return -1;
 

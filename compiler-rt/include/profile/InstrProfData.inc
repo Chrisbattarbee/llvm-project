@@ -78,6 +78,12 @@ INSTR_PROF_DATA(const uint64_t, llvm::Type::getInt64Ty(Ctx), FuncHash, \
 INSTR_PROF_DATA(const IntPtrT, llvm::Type::getInt64PtrTy(Ctx), CounterPtr, \
                 ConstantExpr::getBitCast(CounterPtr, \
                 llvm::Type::getInt64PtrTy(Ctx)))
+INSTR_PROF_DATA(const IntPtrT, llvm::Type::getInt64PtrTy(Ctx), SameCounterPtr, \
+                ConstantExpr::getBitCast(SameCounterPtr, \
+                llvm::Type::getInt64PtrTy(Ctx)))
+INSTR_PROF_DATA(const IntPtrT, llvm::Type::getInt64PtrTy(Ctx), NotSameCounterPtr, \
+                ConstantExpr::getBitCast(NotSameCounterPtr, \
+                llvm::Type::getInt64PtrTy(Ctx)))
 /* This is used to map function pointers for the indirect call targets to
  * function name hashes during the conversion from raw to merged profile
  * data.
@@ -88,7 +94,11 @@ INSTR_PROF_DATA(IntPtrT, llvm::Type::getInt8PtrTy(Ctx), Values, \
                 ValuesPtrExpr)
 INSTR_PROF_DATA(const uint32_t, llvm::Type::getInt32Ty(Ctx), NumCounters, \
                 ConstantInt::get(llvm::Type::getInt32Ty(Ctx), NumCounters))
-INSTR_PROF_DATA(const uint16_t, Int16ArrayTy, NumValueSites[IPVK_Last+1], \
+INSTR_PROF_DATA(const uint32_t, llvm::Type::getInt32Ty(Ctx), NumSameCounters, \
+                ConstantInt::get(llvm::Type::getInt32Ty(Ctx), NumSameCounters))
+INSTR_PROF_DATA(const uint32_t, llvm::Type::getInt32Ty(Ctx), NumNotSameCounters, \
+                ConstantInt::get(llvm::Type::getInt32Ty(Ctx), NumNotSameCounters))
+INSTR_PROF_DATA(const uint17_t, Int16ArrayTy, NumValueSites[IPVK_Last+1], \
                 ConstantArray::get(Int16ArrayTy, Int16ArrayVals))
 #undef INSTR_PROF_DATA
 /* INSTR_PROF_DATA end. */
@@ -667,9 +677,6 @@ serializeValueProfDataFrom(ValueProfRecordClosure *Closure,
 #define INSTR_PROF_DATA_COMMON __llvm_prf_data
 #define INSTR_PROF_NAME_COMMON __llvm_prf_names
 #define INSTR_PROF_CNTS_COMMON __llvm_prf_cnts
-#define INSTR_PROF_CLUS_LASTID_COMMON __llvm_prf_clus_lastid
-#define INSTR_PROF_CLUS_SAME_COMMON __llvm_prf_clus_same
-#define INSTR_PROF_CLUS_NOTSAME_COMMON __llvm_prf_clas_notsame
 #define INSTR_PROF_VALS_COMMON __llvm_prf_vals
 #define INSTR_PROF_VNODES_COMMON __llvm_prf_vnds
 #define INSTR_PROF_COVMAP_COMMON __llvm_covmap

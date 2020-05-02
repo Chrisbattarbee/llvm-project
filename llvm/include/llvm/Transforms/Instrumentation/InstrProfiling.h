@@ -47,6 +47,55 @@ private:
   Module *M;
   Triple TT;
   std::function<const TargetLibraryInfo &(Function &F)> GetTLI;
+
+  struct DataVarTempStorage {
+    uint64_t NumCounters = 0;
+    uint64_t NumNotSameCounters = 0;
+    uint64_t NumSameCounters = 0;
+    GlobalVariable *CounterPtr = nullptr;
+    GlobalVariable *SameCounterPtr = nullptr;
+    GlobalVariable *NotSameCounterPtr = nullptr;
+  };
+
+  void setDataVarRegionTempStorageCounters(DataVarTempStorage* Storage, GlobalVariable* Ptr, uint64_t Num) {
+    Storage->CounterPtr = Ptr;
+    Storage->NumCounters = Num;
+    if (!Storage->SameCounterPtr) {
+      Storage->SameCounterPtr = Ptr;
+      Storage->NumSameCounters = Num;
+    }
+    if (!Storage->NotSameCounterPtr) {
+      Storage->NotSameCounterPtr = Ptr;
+      Storage->NumNotSameCounters = Num;
+    }
+  }
+
+  void setDataVarRegionTempStorageSameCounters(DataVarTempStorage* Storage, GlobalVariable* Ptr, uint64_t Num) {
+    Storage->SameCounterPtr = Ptr;
+    Storage->NumSameCounters = Num;
+    if (!Storage->CounterPtr) {
+      Storage->CounterPtr = Ptr;
+      Storage->NumCounters = Num;
+    }
+    if (!Storage->NotSameCounterPtr) {
+      Storage->NotSameCounterPtr = Ptr;
+      Storage->NumNotSameCounters = Num;
+    }
+  }
+
+  void setDataVarRegionTempStorageNotSameCounters(DataVarTempStorage* Storage, GlobalVariable* Ptr, uint64_t Num) {
+    Storage->NotSameCounterPtr = Ptr;
+    Storage->NumNotSameCounters = Num;
+    if (!Storage->CounterPtr) {
+      Storage->CounterPtr = Ptr;
+      Storage->NumCounters = Num;
+    }
+    if (!Storage->SameCounterPtr) {
+      Storage->SameCounterPtr = Ptr;
+      Storage->NumSameCounters = Num;
+    }
+  }
+
   struct PerFunctionProfileData {
     uint32_t NumValueSites[IPVK_Last + 1];
     GlobalVariable *RegionCounters = nullptr;
@@ -55,6 +104,7 @@ private:
     GlobalVariable *NotSameTakenCounters = nullptr;
     GlobalVariable *CurrentBBCounter = nullptr;
     GlobalVariable *DataVar = nullptr;
+    DataVarTempStorage DataVarStorage;
 
     PerFunctionProfileData() {
       memset(NumValueSites, 0, sizeof(uint32_t) * (IPVK_Last + 1));
@@ -153,7 +203,15 @@ private:
   // Get the BBCounter for a function, creating it if necessary
   template <class InstrumentIntrinsic>
   GlobalVariable *getOrCreateBBCounter(InstrumentIntrinsic *Instr);
-  };
+
+  template <class InstrumentIntrinsic>
+  GlobalVariable *updateProfileData(InstrumentIntrinsic *Instr,
+                              PerFunctionProfileData &PD, Function *Fn,
+                              GlobalValue::LinkageTypes &Linkage,
+                              GlobalValue::VisibilityTypes &Visibility,
+                              LLVMContext &Ctx,
+                              bool NeedComdat);
+};
 } // end namespace llvm
 
 #endif // LLVM_TRANSFORMS_INSTRPROFILING_H

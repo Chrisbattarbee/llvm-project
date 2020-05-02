@@ -458,13 +458,16 @@ bool InstrProfiling::lowerIntrinsics(Function *F) {
       } else if (auto *Ind = dyn_cast<InstrProfValueProfileInst>(Instr)) {
         lowerValueProfileInst(Ind);
         MadeChange = true;
-      } else if (auto *Cluster = dyn_cast<InstrProfClusterednessUpdate>(Instr)) {
+      } else if (auto *Cluster =
+                     dyn_cast<InstrProfClusterednessUpdate>(Instr)) {
         lowerClusterednessUpdate(Cluster);
         MadeChange = true;
       } else if (auto *BBUpdate = dyn_cast<InstrProfCurrentBBUpdate>(Instr)) {
         lowerCurrentBBUpdate(BBUpdate);
         MadeChange = true;
       }
+    }
+    if (MadeChange) {
     }
   }
 
@@ -476,7 +479,8 @@ bool InstrProfiling::lowerIntrinsics(Function *F) {
 }
 
 template <class InstrumentIntrinsic>
-GlobalVariable *InstrProfiling::getOrCreateBBCounter(InstrumentIntrinsic *Instr) {
+GlobalVariable *
+InstrProfiling::getOrCreateBBCounter(InstrumentIntrinsic *Instr) {
   GlobalVariable *NamePtr = Instr->getName();
   auto It = ProfileDataMap.find(NamePtr);
   PerFunctionProfileData PD;
@@ -668,22 +672,25 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessSameCounters(
       GV->setComdat(M->getOrInsertComdat(GV->getName()));
   };
 
-  uint64_t NumCounters = Cluster->getNumCounters()->getZExtValue();
+  uint64_t NumSameCounters = Cluster->getNumCounters()->getZExtValue();
   LLVMContext &Ctx = M->getContext();
-  ArrayType *CounterTy = ArrayType::get(Type::getInt64Ty(Ctx), NumCounters);
+  ArrayType *CounterTy = ArrayType::get(Type::getInt64Ty(Ctx), NumSameCounters);
 
   // Create the counters variable.
   auto *SameCounterPtr = new GlobalVariable(
       *M, CounterTy, false, Linkage, Constant::getNullValue(CounterTy),
       getVarName(Cluster, getClusterednessSameCountersVarPrefix()));
   SameCounterPtr->setVisibility(Visibility);
-//  SameCounterPtr->setSection(
-//      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
   SameCounterPtr->setSection(
-      getInstrProfSectionName(IPSK_clus_same, TT.getObjectFormat()));
+      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
+  //  SameCounterPtr->setSection(
+  //      getInstrProfSectionName(IPSK_clus_same, TT.getObjectFormat()));
   SameCounterPtr->setAlignment(Align(8));
   MaybeSetComdat(SameCounterPtr);
   SameCounterPtr->setLinkage(Linkage);
+
+  setDataVarRegionTempStorageSameCounters(&PD.DataVarStorage, SameCounterPtr, NumSameCounters);
+  updateProfileData(Cluster, PD, Fn, Linkage, Visibility, Ctx, NeedComdat);
 
   PD.SameTakenCounters = SameCounterPtr;
   ProfileDataMap[NamePtr] = PD;
@@ -745,24 +752,28 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessNotSameCounters(
       GV->setComdat(M->getOrInsertComdat(GV->getName()));
   };
 
-  uint64_t NumCounters = Cluster->getNumCounters()->getZExtValue();
+  uint64_t NumNotSameCounters = Cluster->getNumCounters()->getZExtValue();
   LLVMContext &Ctx = M->getContext();
-  ArrayType *CounterTy = ArrayType::get(Type::getInt64Ty(Ctx), NumCounters);
+  ArrayType *CounterTy =
+      ArrayType::get(Type::getInt64Ty(Ctx), NumNotSameCounters);
 
   // Create the counters variable.
-  auto *NotSameCounters = new GlobalVariable(
+  auto *NotSameCounterPtr = new GlobalVariable(
       *M, CounterTy, false, Linkage, Constant::getNullValue(CounterTy),
       getVarName(Cluster, getClusterednessNotSameCountersVarPrefix()));
-  NotSameCounters->setVisibility(Visibility);
-//  NotSameCounters->setSection(
-//      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
-  NotSameCounters->setSection(
-      getInstrProfSectionName(IPSK_clus_notsame, TT.getObjectFormat()));
-  NotSameCounters->setAlignment(Align(8));
-  MaybeSetComdat(NotSameCounters);
-  NotSameCounters->setLinkage(Linkage);
+  NotSameCounterPtr->setVisibility(Visibility);
+  NotSameCounterPtr->setSection(
+      getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
+  //  NotSameCounterPtr->setSection(
+  //      getInstrProfSectionName(IPSK_clus_notsame, TT.getObjectFormat()));
+  NotSameCounterPtr->setAlignment(Align(8));
+  MaybeSetComdat(NotSameCounterPtr);
+  NotSameCounterPtr->setLinkage(Linkage);
 
-  PD.NotSameTakenCounters = NotSameCounters;
+  setDataVarRegionTempStorageNotSameCounters(&PD.DataVarStorage, NotSameCounterPtr, NumNotSameCounters);
+  updateProfileData(Cluster, PD, Fn, Linkage, Visibility, Ctx, NeedComdat);
+
+  PD.NotSameTakenCounters = NotSameCounterPtr;
   ProfileDataMap[NamePtr] = PD;
 
   // Now that the linkage set by the FE has been passed to the data and counter
@@ -775,7 +786,7 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessNotSameCounters(
     ReferencedNames.push_back(NamePtr);
   }
 
-  return NotSameCounters;
+  return NotSameCounterPtr;
 }
 
 // TODO: Deal with runtime relocation same as instrprof_increment
@@ -794,13 +805,16 @@ bool InstrProfiling::lowerClusterednessUpdate(
   Value *ParentIndex = Builder.CreateLoad(BBCounter->getValueType(), BBCounter);
 
   IntegerType *Type = Cluster->getSelfIndex()->getType();
-  Value *ParentLastIdAddr = Builder.CreateInBoundsGEP(LastIdCounters, {ConstantInt::get(Type, 0), ParentIndex});
-  Value *ParentSameAddress = Builder.CreateInBoundsGEP(
-      SameCounters->getValueType(), SameCounters, {ConstantInt::get(Type, 0), ParentIndex});
+  Value *ParentLastIdAddr = Builder.CreateInBoundsGEP(
+      LastIdCounters, {ConstantInt::get(Type, 0), ParentIndex});
+  Value *ParentSameAddress =
+      Builder.CreateInBoundsGEP(SameCounters->getValueType(), SameCounters,
+                                {ConstantInt::get(Type, 0), ParentIndex});
   Value *ParentNotSameAddress = Builder.CreateInBoundsGEP(
-      NotSameCounters->getValueType(), NotSameCounters, {ConstantInt::get(Type, 0), ParentIndex});
+      NotSameCounters->getValueType(), NotSameCounters,
+      {ConstantInt::get(Type, 0), ParentIndex});
 
-//  Builder.CreateExt
+  //  Builder.CreateExt
 
   Value *LoadLastParentBranchValue =
       Builder.CreateLoad(Type, ParentLastIdAddr, "lastbranchvalue");
@@ -833,7 +847,7 @@ bool InstrProfiling::lowerClusterednessUpdate(
   return true;
 }
 
-bool InstrProfiling::lowerCurrentBBUpdate(InstrProfCurrentBBUpdate * BBUpdate) {
+bool InstrProfiling::lowerCurrentBBUpdate(InstrProfCurrentBBUpdate *BBUpdate) {
   GlobalVariable *BBCounter = getOrCreateBBCounter(BBUpdate);
   IRBuilder<> Builder(BBUpdate);
   Builder.CreateStore(BBUpdate->getBBLabel(), BBCounter);
@@ -906,10 +920,10 @@ static bool containsProfilingIntrinsics(Module &M) {
       return true;
   if (auto *F = M.getFunction(
           Intrinsic::getName(llvm::Intrinsic::instrprof_clusteredness_update)))
-      if (!F->use_empty())
-        return true;
-  if (auto *F = M.getFunction(Intrinsic::getName(
-      llvm::Intrinsic::instrprof_current_bb_update)))
+    if (!F->use_empty())
+      return true;
+  if (auto *F = M.getFunction(
+          Intrinsic::getName(llvm::Intrinsic::instrprof_current_bb_update)))
     if (!F->use_empty())
       return true;
   return false;
@@ -1252,9 +1266,58 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
     }
   }
 
+  setDataVarRegionTempStorageCounters(&PD.DataVarStorage, CounterPtr, NumCounters);
+  updateProfileData(Inc, PD, Fn, Linkage, Visibility, Ctx, NeedComdat);
+
+  PD.RegionCounters = CounterPtr;
+  ProfileDataMap[NamePtr] = PD;
+
+  // Now that the linkage set by the FE has been passed to the data and counter
+  // variables, reset Name variable's linkage and visibility to private so that
+  // it can be removed later by the compiler.
+  NamePtr->setLinkage(GlobalValue::PrivateLinkage);
+
+  // Collect the referenced names to be used by emitNameData.
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) !=
+      ReferencedNames.end()) {
+    ReferencedNames.push_back(NamePtr);
+  }
+
+  return CounterPtr;
+}
+
+template <class InstrumentIntrinsic>
+GlobalVariable *InstrProfiling::updateProfileData(
+    InstrumentIntrinsic *Instr, InstrProfiling::PerFunctionProfileData &PD,
+    Function *Fn, GlobalValue::LinkageTypes &Linkage,
+    GlobalValue::VisibilityTypes &Visibility, LLVMContext &Ctx,
+    bool NeedComdat) {
+
+  // Remove the last instance we created from the usedvar list so it is stripped
+  // out
+  if (PD.DataVar) {
+    UsedVars.erase(std::remove(UsedVars.begin(), UsedVars.end(), PD.DataVar));
+    PD.DataVar->eraseFromParent();
+  }
+  auto MaybeSetComdat = [=](GlobalVariable *GV) {
+    if (NeedComdat)
+      GV->setComdat(M->getOrInsertComdat(GV->getName()));
+  };
+
   // Create data variable.
   auto *Int16Ty = Type::getInt16Ty(Ctx);
   auto *Int16ArrayTy = ArrayType::get(Int16Ty, IPVK_Last + 1);
+  auto *Int8PtrTy = Type::getInt8PtrTy(Ctx);
+  Constant *ValuesPtrExpr = ConstantPointerNull::get(Int8PtrTy);
+
+  // Macro shit
+  uint64_t NumCounters = PD.DataVarStorage.NumCounters;
+  uint64_t NumNotSameCounters = PD.DataVarStorage.NumNotSameCounters;
+  uint64_t NumSameCounters = PD.DataVarStorage.NumSameCounters;
+  GlobalVariable *CounterPtr = PD.DataVarStorage.CounterPtr;
+  GlobalVariable *SameCounterPtr = PD.DataVarStorage.SameCounterPtr;
+  GlobalVariable *NotSameCounterPtr = PD.DataVarStorage.NotSameCounterPtr;
+
   Type *DataTypes[] = {
 #define INSTR_PROF_DATA(Type, LLVMType, Name, Init) LLVMType,
 #include "llvm/ProfileData/InstrProfData.inc"
@@ -1273,33 +1336,19 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
 #define INSTR_PROF_DATA(Type, LLVMType, Name, Init) Init,
 #include "llvm/ProfileData/InstrProfData.inc"
   };
-  auto *Data = new GlobalVariable(*M, DataTy, false, Linkage,
-                                  ConstantStruct::get(DataTy, DataVals),
-                                  getVarName(Inc, getInstrProfDataVarPrefix()));
+  auto *Data = new GlobalVariable(
+      *M, DataTy, false, Linkage, ConstantStruct::get(DataTy, DataVals),
+      getVarName(Instr, getInstrProfDataVarPrefix()));
   Data->setVisibility(Visibility);
   Data->setSection(getInstrProfSectionName(IPSK_data, TT.getObjectFormat()));
   Data->setAlignment(Align(INSTR_PROF_DATA_ALIGNMENT));
   MaybeSetComdat(Data);
   Data->setLinkage(Linkage);
-
-  PD.RegionCounters = CounterPtr;
   PD.DataVar = Data;
-  ProfileDataMap[NamePtr] = PD;
 
   // Mark the data variable as used so that it isn't stripped out.
   UsedVars.push_back(Data);
-  // Now that the linkage set by the FE has been passed to the data and counter
-  // variables, reset Name variable's linkage and visibility to private so that
-  // it can be removed later by the compiler.
-  NamePtr->setLinkage(GlobalValue::PrivateLinkage);
-  // Collect the referenced names to be used by emitNameData.
-
-  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) !=
-      ReferencedNames.end()) {
-    ReferencedNames.push_back(NamePtr);
-  }
-
-  return CounterPtr;
+  return Data;
 }
 
 void InstrProfiling::emitVNodes() {
@@ -1488,4 +1537,3 @@ void InstrProfiling::emitInitialization() {
 
   appendToGlobalCtors(*M, F, 0);
 }
-

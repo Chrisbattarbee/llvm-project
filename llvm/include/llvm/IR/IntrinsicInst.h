@@ -867,11 +867,11 @@ public:
   }
 
   ConstantInt *getSelfIndex() const {
-    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(3)));
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(2)));
   }
 
   ConstantInt *getHash() const {
-    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(4)));
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(3)));
   }
 };
 
