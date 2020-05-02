@@ -708,12 +708,16 @@ struct InstrProfRecord {
   InstrProfRecord(InstrProfRecord &&) = default;
   InstrProfRecord(const InstrProfRecord &RHS)
       : Counts(RHS.Counts),
+        ClusterednessSameCounts(RHS.ClusterednessSameCounts),
+        ClusterednessNotSameCounts(RHS.ClusterednessNotSameCounts),
         ValueData(RHS.ValueData
                       ? std::make_unique<ValueProfData>(*RHS.ValueData)
                       : nullptr) {}
   InstrProfRecord &operator=(InstrProfRecord &&) = default;
   InstrProfRecord &operator=(const InstrProfRecord &RHS) {
     Counts = RHS.Counts;
+    ClusterednessSameCounts = RHS.ClusterednessSameCounts;
+    ClusterednessNotSameCounts = RHS.ClusterednessNotSameCounts;
     if (!RHS.ValueData) {
       ValueData = nullptr;
       return *this;

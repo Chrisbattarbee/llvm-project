@@ -263,6 +263,10 @@ bool InstrProfWriter::shouldEncodeData(const ProfilingData &PD) {
     const InstrProfRecord &IPR = Func.second;
     if (llvm::any_of(IPR.Counts, [](uint64_t Count) { return Count > 0; }))
       return true;
+    if (llvm::any_of(IPR.ClusterednessSameCounts, [](uint64_t Count) { return Count > 0; }))
+      return true;
+    if (llvm::any_of(IPR.ClusterednessNotSameCounts, [](uint64_t Count) { return Count > 0; }))
+      return true;
   }
   return false;
 }
@@ -463,6 +467,7 @@ Error InstrProfWriter::writeText(raw_fd_ostream &OS) {
         return E;
       for (const auto &Func : I.getValue())
         OrderedFuncData.push_back(std::make_pair(I.getKey(), Func));
+      printf("test");
     }
   }
 
