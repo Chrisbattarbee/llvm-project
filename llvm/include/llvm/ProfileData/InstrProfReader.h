@@ -255,6 +255,8 @@ private:
   Error readName(NamedInstrProfRecord &Record);
   Error readFuncHash(NamedInstrProfRecord &Record);
   Error readRawCounts(InstrProfRecord &Record);
+  Error readClusterednessSameCounts(InstrProfRecord &Record);
+  Error readClusterednessNotSameCounts(InstrProfRecord &Record);
   Error readValueProfilingData(InstrProfRecord &Record);
   bool atEnd() const { return Data == DataEnd; }
 
@@ -283,6 +285,7 @@ private:
     return Symtab->getFuncName(swap(NameRef));
   }
 };
+
 
 using RawInstrProfReader32 = RawInstrProfReader<uint32_t>;
 using RawInstrProfReader64 = RawInstrProfReader<uint64_t>;

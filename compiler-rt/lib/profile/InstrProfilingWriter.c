@@ -280,6 +280,8 @@ lprofWriteDataImpl(ProfDataWriter *Writer, const __llvm_profile_data *DataBegin,
 #define INSTR_PROF_RAW_HEADER(Type, Name, Init) Header.Name = Init;
 #include "profile/InstrProfData.inc"
 
+  printf("Size of llvm_profile_darta: %d", DataSize);
+
   /* Write the data. */
   ProfDataIOVec IOVec[] = {
       {&Header, sizeof(__llvm_profile_header), 1, 0},

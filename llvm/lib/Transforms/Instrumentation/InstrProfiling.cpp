@@ -546,7 +546,7 @@ InstrProfiling::getOrCreateBBCounter(InstrumentIntrinsic *Instr) {
   NamePtr->setLinkage(GlobalValue::PrivateLinkage);
   // Collect the referenced names to be used by emitNameData.
   // Make sure we aren't inserting duplicates because this will segfault later
-  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) !=
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) ==
       ReferencedNames.end()) {
     ReferencedNames.push_back(NamePtr);
   }
@@ -620,7 +620,7 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessLastIdCounters(
   // it can be removed later by the compiler.
   NamePtr->setLinkage(GlobalValue::PrivateLinkage);
   // Collect the referenced names to be used by emitNameData.
-  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) !=
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) ==
       ReferencedNames.end()) {
     ReferencedNames.push_back(NamePtr);
   }
@@ -700,7 +700,7 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessSameCounters(
   // it can be removed later by the compiler.
   NamePtr->setLinkage(GlobalValue::PrivateLinkage);
   // Collect the referenced names to be used by emitNameData.
-  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) !=
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) ==
       ReferencedNames.end()) {
     ReferencedNames.push_back(NamePtr);
   }
@@ -781,7 +781,7 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessNotSameCounters(
   // it can be removed later by the compiler.
   NamePtr->setLinkage(GlobalValue::PrivateLinkage);
   // Collect the referenced names to be used by emitNameData.
-  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) !=
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) ==
       ReferencedNames.end()) {
     ReferencedNames.push_back(NamePtr);
   }
@@ -1278,7 +1278,7 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
   NamePtr->setLinkage(GlobalValue::PrivateLinkage);
 
   // Collect the referenced names to be used by emitNameData.
-  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) !=
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) ==
       ReferencedNames.end()) {
     ReferencedNames.push_back(NamePtr);
   }

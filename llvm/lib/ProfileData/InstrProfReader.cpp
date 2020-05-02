@@ -409,6 +409,9 @@ Error RawInstrProfReader<IntPtrT>::readFuncHash(NamedInstrProfRecord &Record) {
   return success();
 }
 
+
+/* TODO Refactor this with the following two functions readClusterednessSameCounts
+ * and readNotSameConts to remove duplicated reading code */
 template <class IntPtrT>
 Error RawInstrProfReader<IntPtrT>::readRawCounts(
     InstrProfRecord &Record) {
@@ -438,6 +441,74 @@ Error RawInstrProfReader<IntPtrT>::readRawCounts(
       Record.Counts.push_back(swap(Count));
   } else
     Record.Counts = RawCounts;
+
+  return success();
+}
+
+
+template <class IntPtrT>
+Error RawInstrProfReader<IntPtrT>::readClusterednessSameCounts(
+    InstrProfRecord &Record) {
+  uint32_t NumCounters = swap(Data->NumSameCounters);
+  IntPtrT CounterPtr = Data->SameCounterPtr;
+  if (NumCounters == 0)
+    return error(instrprof_error::malformed);
+
+  auto *NamesStartAsCounter = reinterpret_cast<const uint64_t *>(NamesStart);
+  ptrdiff_t MaxNumCounters = NamesStartAsCounter - CountersStart;
+
+  // Check bounds. Note that the counter pointer embedded in the data record
+  // may itself be corrupt.
+  if (NumCounters > MaxNumCounters)
+    return error(instrprof_error::malformed);
+  ptrdiff_t CounterOffset = getCounterOffset(CounterPtr);
+  if (CounterOffset < 0 || CounterOffset > MaxNumCounters ||
+      (CounterOffset + NumCounters) > MaxNumCounters)
+    return error(instrprof_error::malformed);
+
+  auto RawClusterednessSameCounts = makeArrayRef(getCounter(CounterOffset), NumCounters);
+
+  if (ShouldSwapBytes) {
+    Record.ClusterednessSameCounts.clear();
+    Record.ClusterednessSameCounts.reserve(RawClusterednessSameCounts.size());
+    for (uint64_t Count : RawClusterednessSameCounts)
+      Record.ClusterednessSameCounts.push_back(swap(Count));
+  } else
+    Record.ClusterednessSameCounts = RawClusterednessSameCounts;
+
+  return success();
+}
+
+
+template <class IntPtrT>
+Error RawInstrProfReader<IntPtrT>::readClusterednessNotSameCounts(
+    InstrProfRecord &Record) {
+  uint32_t NumCounters = swap(Data->NumNotSameCounters);
+  IntPtrT CounterPtr = Data->NotSameCounterPtr;
+  if (NumCounters == 0)
+    return error(instrprof_error::malformed);
+
+  auto *NamesStartAsCounter = reinterpret_cast<const uint64_t *>(NamesStart);
+  ptrdiff_t MaxNumCounters = NamesStartAsCounter - CountersStart;
+
+  // Check bounds. Note that the counter pointer embedded in the data record
+  // may itself be corrupt.
+  if (NumCounters > MaxNumCounters)
+    return error(instrprof_error::malformed);
+  ptrdiff_t CounterOffset = getCounterOffset(CounterPtr);
+  if (CounterOffset < 0 || CounterOffset > MaxNumCounters ||
+      (CounterOffset + NumCounters) > MaxNumCounters)
+    return error(instrprof_error::malformed);
+
+  auto RawClusterednessNotSameCounts = makeArrayRef(getCounter(CounterOffset), NumCounters);
+
+  if (ShouldSwapBytes) {
+    Record.ClusterednessNotSameCounts.clear();
+    Record.ClusterednessNotSameCounts.reserve(RawClusterednessNotSameCounts.size());
+    for (uint64_t Count : RawClusterednessNotSameCounts)
+      Record.ClusterednessNotSameCounts.push_back(swap(Count));
+  } else
+    Record.ClusterednessNotSameCounts = RawClusterednessNotSameCounts;
 
   return success();
 }
@@ -488,6 +559,14 @@ Error RawInstrProfReader<IntPtrT>::readNextRecord(NamedInstrProfRecord &Record) 
 
   // Read raw counts and set Record.
   if (Error E = readRawCounts(Record))
+    return error(std::move(E));
+
+  // Read clusteredness same counts and set Record.
+  if (Error E = readClusterednessSameCounts(Record))
+    return error(std::move(E));
+
+  // Read clusteredness not same counts and set Record.
+  if (Error E = readClusterednessNotSameCounts(Record))
     return error(std::move(E));
 
   // Read value data and set Record.

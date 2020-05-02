@@ -98,7 +98,7 @@ INSTR_PROF_DATA(const uint32_t, llvm::Type::getInt32Ty(Ctx), NumSameCounters, \
                 ConstantInt::get(llvm::Type::getInt32Ty(Ctx), NumSameCounters))
 INSTR_PROF_DATA(const uint32_t, llvm::Type::getInt32Ty(Ctx), NumNotSameCounters, \
                 ConstantInt::get(llvm::Type::getInt32Ty(Ctx), NumNotSameCounters))
-INSTR_PROF_DATA(const uint17_t, Int16ArrayTy, NumValueSites[IPVK_Last+1], \
+INSTR_PROF_DATA(const uint16_t, Int16ArrayTy, NumValueSites[IPVK_Last+1], \
                 ConstantArray::get(Int16ArrayTy, Int16ArrayVals))
 #undef INSTR_PROF_DATA
 /* INSTR_PROF_DATA end. */

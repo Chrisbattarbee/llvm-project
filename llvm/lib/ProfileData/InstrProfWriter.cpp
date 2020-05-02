@@ -406,6 +406,16 @@ void InstrProfWriter::writeRecordInText(StringRef Name, uint64_t Hash,
   for (uint64_t Count : Func.Counts)
     OS << Count << "\n";
 
+  OS << "# Num Same Clusteredness Counters:\n" << Func.ClusterednessSameCounts.size() << "\n";
+  OS << "# Clusteredness Same Values:\n";
+  for (uint64_t ClusterednessSameCount : Func.ClusterednessSameCounts)
+    OS << ClusterednessSameCount << "\n";
+
+  OS << "# Num Not Same Clusteredness Counters:\n" << Func.ClusterednessSameCounts.size() << "\n";
+  OS << "# Clusteredness Not Same Values:\n";
+  for (uint64_t ClusterednessNotSameCount : Func.ClusterednessNotSameCounts)
+    OS << ClusterednessNotSameCount << "\n";
+
   uint32_t NumValueKinds = Func.getNumValueKinds();
   if (!NumValueKinds) {
     OS << "\n";
