@@ -7,7 +7,6 @@ int test() {
     if (rand()  < RAND_MAX / 2) {
         return 2;
     }
-    printf("here");
     return 1;
 }
 

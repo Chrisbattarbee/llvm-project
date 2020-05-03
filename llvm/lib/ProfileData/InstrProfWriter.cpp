@@ -467,7 +467,6 @@ Error InstrProfWriter::writeText(raw_fd_ostream &OS) {
         return E;
       for (const auto &Func : I.getValue())
         OrderedFuncData.push_back(std::make_pair(I.getKey(), Func));
-      printf("test");
     }
   }
 
