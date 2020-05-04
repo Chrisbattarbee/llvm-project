@@ -943,7 +943,7 @@ static void instrumentOneFunc(
   std::unordered_map<const BasicBlock *, uint64_t> BasicBlockLabelMap;
   I = 0;
   for (auto *BB : AllBBs) {
-    BasicBlockLabelMap[BB] = I ++;
+    BasicBlockLabelMap[BB] = I++;
   }
 
   NumCounters = AllBBs.size(); // TODO Should also have the num of selects too
@@ -1057,7 +1057,11 @@ using DirectEdges = SmallVector<PGOUseEdge *, 2>;
 // This class stores the auxiliary information for each BB.
 struct UseBBInfo : public BBInfo {
   uint64_t CountValue = 0;
+  uint64_t ClusterednessSameTakenValue = 0;
+  uint64_t ClusterednessNotSameTakenValue = 0;
   bool CountValid;
+  bool ClusterednessSameCountValid;
+  bool ClusterednessNotSameCountValid;
   int32_t UnknownCountInEdge = 0;
   int32_t UnknownCountOutEdge = 0;
   DirectEdges InEdges;
@@ -1072,6 +1076,18 @@ struct UseBBInfo : public BBInfo {
   void setBBInfoCount(uint64_t Value) {
     CountValue = Value;
     CountValid = true;
+  }
+
+  // Set the profile count value for this BB.
+  void setBBInfoSameClusteredness(uint64_t Value) {
+    ClusterednessSameTakenValue = Value;
+    ClusterednessSameCountValid = true;
+  }
+
+  // Set the profile count value for this BB.
+  void setBBInfoNotSameClusteredness(uint64_t Value) {
+    ClusterednessNotSameTakenValue = Value;
+    ClusterednessNotSameCountValid = true;
   }
 
   // Return the information string of this object.
@@ -1194,7 +1210,10 @@ private:
   bool IsCS;
 
   // Find the Instrumented BB and set the value. Return false on error.
-  bool setInstrumentedCounts(const std::vector<uint64_t> &CountFromProfile);
+  bool setInstrumentedCounts(
+      const std::vector<uint64_t> &CountFromProfile,
+      const std::vector<uint64_t> &ClusterednessSameCountFromProfile,
+      const std::vector<uint64_t> &ClusterednessNotSameCountFromProfile);
 
   // Set the edge counter value for the unknown edge -- there should be only
   // one unknown edge.
@@ -1219,7 +1238,9 @@ private:
 // Visit all the edges and assign the count value for the instrumented
 // edges and the BB. Return false on error.
 bool PGOUseFunc::setInstrumentedCounts(
-    const std::vector<uint64_t> &CountFromProfile) {
+    const std::vector<uint64_t> &CountFromProfile,
+    const std::vector<uint64_t> &ClusterednessSameCountFromProfile,
+    const std::vector<uint64_t> &ClusterednessNotSameCountFromProfile) {
 
   std::vector<BasicBlock *> InstrumentBBs;
   FuncInfo.getInstrumentBBs(InstrumentBBs);
@@ -1236,6 +1257,17 @@ bool PGOUseFunc::setInstrumentedCounts(
     uint64_t CountValue = CountFromProfile[I++];
     UseBBInfo &Info = getBBInfo(InstrBB);
     Info.setBBInfoCount(CountValue);
+  }
+
+  // Currently clusteredness takes place at all BBs so we need this additional loop
+  std::vector<BasicBlock *> AllBBs;
+  FuncInfo.getAllBBs(AllBBs);
+  for (BasicBlock *BB : AllBBs) {
+    uint64_t ClusterednessSameCountValue = ClusterednessSameCountFromProfile[I++];
+    uint64_t ClusterednessNotSameCountValue = ClusterednessNotSameCountFromProfile[I++];
+    UseBBInfo &Info = getBBInfo(BB);
+    Info.setBBInfoSameClusteredness(ClusterednessSameCountValue);
+    Info.setBBInfoNotSameClusteredness(ClusterednessNotSameCountValue);
   }
   ProfileCountSize = CountFromProfile.size();
   CountPosition = I;
@@ -1289,6 +1321,7 @@ void PGOUseFunc::setEdgeCount(DirectEdges &Edges, uint64_t Value) {
     getBBInfo(E->DestBB).UnknownCountInEdge--;
     return;
   }
+//   Hypothesis for removing this check is that with clusteredness, we can have zero unknown edges
   llvm_unreachable("Cannot find the unknown count edge");
 }
 
@@ -1336,6 +1369,10 @@ bool PGOUseFunc::readCounters(IndexedInstrProfReader *PGOReader,
   }
   ProfileRecord = std::move(Result.get());
   std::vector<uint64_t> &CountFromProfile = ProfileRecord.Counts;
+  std::vector<uint64_t> &ClusterednessSameCountsFromProfile =
+      ProfileRecord.ClusterednessSameCounts;
+  std::vector<uint64_t> &ClusterednessNotSameCountsFromProfile =
+      ProfileRecord.ClusterednessNotSameCounts;
 
   IsCS ? NumOfCSPGOFunc++ : NumOfPGOFunc++;
   LLVM_DEBUG(dbgs() << CountFromProfile.size() << " counts\n");
@@ -1346,12 +1383,12 @@ bool PGOUseFunc::readCounters(IndexedInstrProfReader *PGOReader,
   }
   AllZeros = (ValueSum == 0);
 
-  LLVM_DEBUG(dbgs() << "SUM =  " << ValueSum << "\n");
+  LLVM_DEBUG(dbgs() << "SUM (Not including clusteredness) =  " << ValueSum << "\n");
 
   getBBInfo(nullptr).UnknownCountOutEdge = 2;
   getBBInfo(nullptr).UnknownCountInEdge = 2;
 
-  if (!setInstrumentedCounts(CountFromProfile)) {
+  if (!setInstrumentedCounts(CountFromProfile, ClusterednessSameCountsFromProfile, ClusterednessNotSameCountsFromProfile)) {
     LLVM_DEBUG(
         dbgs() << "Inconsistent number of counts, skipping this function");
     Ctx.diagnose(DiagnosticInfoPGOProfile(
@@ -1682,7 +1719,7 @@ static bool annotateAllFunctions(
     ProfileSummaryInfo *PSI, bool IsCS) {
   LLVM_DEBUG(dbgs() << "Read in profile counters: ");
   auto &Ctx = M.getContext();
-  // Read the counter array from file.
+  // Read the counter arrays from file.
   auto ReaderOrErr =
       IndexedInstrProfReader::create(ProfileFileName, ProfileRemappingFileName);
   if (Error E = ReaderOrErr.takeError()) {
