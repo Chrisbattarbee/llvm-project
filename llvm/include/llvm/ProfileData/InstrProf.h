@@ -704,6 +704,7 @@ struct InstrProfRecord {
   std::vector<uint64_t> ClusterednessNotSameCounts;
 
   InstrProfRecord() = default;
+//  InstrProfRecord(std::vector<uint64_t> Counts, std::vector<uint64_t> SameCounts, std::vector<uint64_t> NotSameCounts) : Counts(std::move(Counts)), ClusterednessSameCounts(SameCounts), ClusterednessNotSameCounts(NotSameCounts) {}
   InstrProfRecord(std::vector<uint64_t> Counts) : Counts(std::move(Counts)) {}
   InstrProfRecord(InstrProfRecord &&) = default;
   InstrProfRecord(const InstrProfRecord &RHS)
@@ -869,8 +870,16 @@ struct NamedInstrProfRecord : InstrProfRecord {
   static const int CS_FLAG_IN_FUNC_HASH = 60;
 
   NamedInstrProfRecord() = default;
+//  NamedInstrProfRecord(StringRef Name, uint64_t Hash,
+//                       std::vector<uint64_t> Counts,
+//                       std::vector<uint64_t> SameCounts,
+//                       std::vector<uint64_t> NotSameCounts
+//                       )
+//      : InstrProfRecord(std::move(Counts), std::move(SameCounts), std::move(NotSameCounts)), Name(Name), Hash(Hash) {}
+
   NamedInstrProfRecord(StringRef Name, uint64_t Hash,
-                       std::vector<uint64_t> Counts)
+                       std::vector<uint64_t> Counts
+  )
       : InstrProfRecord(std::move(Counts)), Name(Name), Hash(Hash) {}
 
   static bool hasCSFlagInHash(uint64_t FuncHash) {

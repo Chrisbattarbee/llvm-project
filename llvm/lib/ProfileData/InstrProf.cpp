@@ -553,7 +553,10 @@ void InstrProfRecord::overlap(InstrProfRecord &Other, OverlapStats &Overlap,
   // FuncLevel CountSum for other should already computed and nonzero.
   assert(FuncLevelOverlap.Test.CountSum >= 1.0f);
   accumulateCounts(FuncLevelOverlap.Base);
-  bool Mismatch = (Counts.size() != Other.Counts.size());
+  bool Mismatch =  (Counts.size() != Other.Counts.size())                                         ||
+                   (ClusterednessSameCounts.size() != Other.ClusterednessSameCounts.size()        ||
+                   (ClusterednessNotSameCounts.size() != Other.ClusterednessNotSameCounts.size())
+                   );
 
   // Check if the value profiles mismatch.
   if (!Mismatch) {
@@ -654,6 +657,9 @@ void InstrProfRecord::mergeValueProfData(
 
 void InstrProfRecord::merge(InstrProfRecord &Other, uint64_t Weight,
                             function_ref<void(instrprof_error)> Warn) {
+
+  // Standard counts
+
   // If the number of counters doesn't match we either have bad data
   // or a hash collision.
   if (Counts.size() != Other.Counts.size()) {
@@ -665,6 +671,34 @@ void InstrProfRecord::merge(InstrProfRecord &Other, uint64_t Weight,
     bool Overflowed;
     Counts[I] =
         SaturatingMultiplyAdd(Other.Counts[I], Weight, Counts[I], &Overflowed);
+    if (Overflowed)
+      Warn(instrprof_error::counter_overflow);
+  }
+
+  // Clusteredness Same
+  if (ClusterednessSameCounts.size() != Other.ClusterednessSameCounts.size()) {
+    Warn(instrprof_error::count_mismatch);
+    return;
+  }
+
+  for (size_t I = 0, E = Other.ClusterednessSameCounts.size(); I < E; ++I) {
+    bool Overflowed;
+    ClusterednessSameCounts[I] =
+        SaturatingMultiplyAdd(Other.ClusterednessSameCounts[I], Weight, ClusterednessSameCounts[I], &Overflowed);
+    if (Overflowed)
+      Warn(instrprof_error::counter_overflow);
+  }
+
+  // Clusteredness Not Same
+  if (ClusterednessNotSameCounts.size() != Other.ClusterednessNotSameCounts.size()) {
+    Warn(instrprof_error::count_mismatch);
+    return;
+  }
+
+  for (size_t I = 0, E = Other.ClusterednessNotSameCounts.size(); I < E; ++I) {
+    bool Overflowed;
+    ClusterednessNotSameCounts[I] =
+        SaturatingMultiplyAdd(Other.ClusterednessNotSameCounts[I], Weight, ClusterednessNotSameCounts[I], &Overflowed);
     if (Overflowed)
       Warn(instrprof_error::counter_overflow);
   }
@@ -685,6 +719,18 @@ void InstrProfRecord::scale(uint64_t Weight,
   for (auto &Count : this->Counts) {
     bool Overflowed;
     Count = SaturatingMultiply(Count, Weight, &Overflowed);
+    if (Overflowed)
+      Warn(instrprof_error::counter_overflow);
+  }
+  for (auto &ClusterednessSameCount : this->ClusterednessSameCounts) {
+    bool Overflowed;
+    ClusterednessSameCount = SaturatingMultiply(ClusterednessSameCount, Weight, &Overflowed);
+    if (Overflowed)
+      Warn(instrprof_error::counter_overflow);
+  }
+  for (auto &ClusterednessNotSameCount : this->ClusterednessNotSameCounts) {
+    bool Overflowed;
+    ClusterednessNotSameCount = SaturatingMultiply(ClusterednessNotSameCount, Weight, &Overflowed);
     if (Overflowed)
       Warn(instrprof_error::counter_overflow);
   }

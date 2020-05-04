@@ -617,8 +617,12 @@ data_type InstrProfLookupTrait::ReadData(StringRef K, const unsigned char *D,
 
   DataBuffer.clear();
   std::vector<uint64_t> CounterBuffer;
+  std::vector<uint64_t> SameCounterBuffer;
+  std::vector<uint64_t> NotSameCounterBuffer;
 
   const unsigned char *End = D + N;
+
+  // NOTE: WHEN DEBUGGING, D is implicitly updated by readNext
   while (D < End) {
     // Read hash.
     if (D + sizeof(uint64_t) >= End)
@@ -643,6 +647,41 @@ data_type InstrProfLookupTrait::ReadData(StringRef K, const unsigned char *D,
       CounterBuffer.push_back(endian::readNext<uint64_t, little, unaligned>(D));
 
     DataBuffer.emplace_back(K, Hash, std::move(CounterBuffer));
+
+    // Read clusteredness same counter values
+    uint64_t SameCountsSize = 0;
+    if (GET_VERSION(FormatVersion) != IndexedInstrProf::ProfVersion::Version1) {
+      if (D + sizeof(uint64_t) > End)
+        return data_type();
+      SameCountsSize = endian::readNext<uint64_t, little, unaligned>(D);
+    }
+    // Read counter values.
+    if (D + SameCountsSize * sizeof(uint64_t) > End)
+      return data_type();
+
+    SameCounterBuffer.clear();
+    SameCounterBuffer.reserve(SameCountsSize);
+    for (uint64_t J = 0; J < SameCountsSize; ++J)
+      SameCounterBuffer.push_back(endian::readNext<uint64_t, little, unaligned>(D));
+
+    DataBuffer.emplace_back(K, Hash, std::move(SameCounterBuffer));
+
+    // Read notsame clusteredness counter values
+    uint64_t NotSameCountsSize = 0;
+    if (GET_VERSION(FormatVersion) != IndexedInstrProf::ProfVersion::Version1) {
+      if (D + sizeof(uint64_t) > End)
+        return data_type();
+      NotSameCountsSize = endian::readNext<uint64_t, little, unaligned>(D);
+    }
+    if (D + NotSameCountsSize * sizeof(uint64_t) > End)
+      return data_type();
+
+    NotSameCounterBuffer.clear();
+    NotSameCounterBuffer.reserve(NotSameCountsSize);
+    for (uint64_t J = 0; J < NotSameCountsSize; ++J)
+      NotSameCounterBuffer.push_back(endian::readNext<uint64_t, little, unaligned>(D));
+
+    DataBuffer.emplace_back(K, Hash, std::move(NotSameCounterBuffer));
 
     // Read value profiling data.
     if (GET_VERSION(FormatVersion) > IndexedInstrProf::ProfVersion::Version2 &&
