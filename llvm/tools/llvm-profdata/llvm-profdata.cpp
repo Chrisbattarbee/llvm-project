@@ -939,15 +939,15 @@ static int showInstrProfile(const std::string &Filename, bool ShowCounts,
         OS << "    Same Clusteredness Block counts: [";
         Start = (IsIRInstr ? 0 : 1);
         for (size_t I = Start, E = Func.ClusterednessSameCounts.size(); I < E; ++I) {
-          OS << (I == Start ? "" : ", ") << Func.Counts[I];
+          OS << (I == Start ? "" : ", ") << Func.ClusterednessSameCounts[I];
         }
         OS << "]\n";
 
         // Not Same Clusteredness
         OS << "    Not Same Clusteredness Block counts: [";
         Start = (IsIRInstr ? 0 : 1);
-        for (size_t I = Start, E = Func.ClusterednessSameCounts.size(); I < E; ++I) {
-          OS << (I == Start ? "" : ", ") << Func.Counts[I];
+        for (size_t I = Start, E = Func.ClusterednessNotSameCounts.size(); I < E; ++I) {
+          OS << (I == Start ? "" : ", ") << Func.ClusterednessNotSameCounts[I];
         }
         OS << "]\n";
       }
