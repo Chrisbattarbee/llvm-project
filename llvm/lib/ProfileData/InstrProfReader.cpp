@@ -646,7 +646,6 @@ data_type InstrProfLookupTrait::ReadData(StringRef K, const unsigned char *D,
     for (uint64_t J = 0; J < CountsSize; ++J)
       CounterBuffer.push_back(endian::readNext<uint64_t, little, unaligned>(D));
 
-    DataBuffer.emplace_back(K, Hash, std::move(CounterBuffer));
 
     // Read clusteredness same counter values
     uint64_t SameCountsSize = 0;
@@ -664,7 +663,6 @@ data_type InstrProfLookupTrait::ReadData(StringRef K, const unsigned char *D,
     for (uint64_t J = 0; J < SameCountsSize; ++J)
       SameCounterBuffer.push_back(endian::readNext<uint64_t, little, unaligned>(D));
 
-    DataBuffer.emplace_back(K, Hash, std::move(SameCounterBuffer));
 
     // Read notsame clusteredness counter values
     uint64_t NotSameCountsSize = 0;
@@ -681,7 +679,7 @@ data_type InstrProfLookupTrait::ReadData(StringRef K, const unsigned char *D,
     for (uint64_t J = 0; J < NotSameCountsSize; ++J)
       NotSameCounterBuffer.push_back(endian::readNext<uint64_t, little, unaligned>(D));
 
-    DataBuffer.emplace_back(K, Hash, std::move(NotSameCounterBuffer));
+    DataBuffer.emplace_back(K, Hash, std::move(CounterBuffer), std::move(SameCounterBuffer), std::move(NotSameCounterBuffer));
 
     // Read value profiling data.
     if (GET_VERSION(FormatVersion) > IndexedInstrProf::ProfVersion::Version2 &&
