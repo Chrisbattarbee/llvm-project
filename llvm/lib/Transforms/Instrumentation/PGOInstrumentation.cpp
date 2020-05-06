@@ -769,28 +769,17 @@ void FuncPGOInstrumentation<Edge, BBInfo>::getInstrumentBBs(
 template <class Edge, class BBInfo>
 void FuncPGOInstrumentation<Edge, BBInfo>::getAllBBs(
     std::vector<BasicBlock *> &InstrumentBBs) {
-  // Use a worklist as we will update the vector during the iteration.
-  std::vector<Edge *> EdgeList;
-  EdgeList.reserve(MST.AllEdges.size());
-  for (auto &E : MST.AllEdges)
-    EdgeList.push_back(E.get());
-
-  for (auto &E : EdgeList) {
-    BasicBlock *InstrBB = getInstrBB(E, false);
-    if (InstrBB)
-      InstrumentBBs.push_back(InstrBB);
-  }
-
-  // Set up InEdges/OutEdges for all BBs.
+  std::set<BasicBlock*> BBSet;
   for (auto &E : MST.AllEdges) {
-    if (E->Removed)
-      continue;
-    const BasicBlock *SrcBB = E->SrcBB;
-    const BasicBlock *DestBB = E->DestBB;
-    BBInfo &SrcInfo = getBBInfo(SrcBB);
-    BBInfo &DestInfo = getBBInfo(DestBB);
-    SrcInfo.addOutEdge(E.get());
-    DestInfo.addInEdge(E.get());
+    if (E->SrcBB) {
+      BBSet.insert(const_cast<BasicBlock*>(E->SrcBB));
+    }
+    if (E->DestBB) {
+      BBSet.insert(const_cast<BasicBlock*>(E->DestBB));
+    }
+  }
+  for (auto *BB: BBSet) {
+    InstrumentBBs.push_back(BB);
   }
 }
 
@@ -1067,7 +1056,7 @@ struct UseBBInfo : public BBInfo {
   DirectEdges InEdges;
   DirectEdges OutEdges;
 
-  UseBBInfo(unsigned IX) : BBInfo(IX), CountValid(false) {}
+  UseBBInfo(unsigned IX) : BBInfo(IX), CountValid(false), ClusterednessSameCountValid(false), ClusterednessNotSameCountValid(false) {}
 
   UseBBInfo(unsigned IX, uint64_t C)
       : BBInfo(IX), CountValue(C), CountValid(true) {}
@@ -1076,6 +1065,10 @@ struct UseBBInfo : public BBInfo {
   void setBBInfoCount(uint64_t Value) {
     CountValue = Value;
     CountValid = true;
+  }
+
+  void unsetCountValid() {
+    CountValid = false;
   }
 
   // Set the profile count value for this BB.
@@ -1258,19 +1251,35 @@ bool PGOUseFunc::setInstrumentedCounts(
     UseBBInfo &Info = getBBInfo(InstrBB);
     Info.setBBInfoCount(CountValue);
   }
+  CountPosition = I;
+  ProfileCountSize = CountFromProfile.size();
 
-  // Currently clusteredness takes place at all BBs so we need this additional loop
+  // Begin Clusterednesss
   std::vector<BasicBlock *> AllBBs;
   FuncInfo.getAllBBs(AllBBs);
+  // Sort the list of BBs so that the labelling is deterministic each time
+  // we create it
+  std::sort(AllBBs.begin(), AllBBs.end(), compareBasicBlocks);
+
+  // Remove duplicates
+  std::unordered_set<BasicBlock *> DuplicateRemoverSet(AllBBs.begin(),
+                                                       AllBBs.end());
+  AllBBs.clear();
+  AllBBs = std::vector<BasicBlock *>(DuplicateRemoverSet.begin(),
+                                     DuplicateRemoverSet.end());
+
+  // Currently clusteredness takes place at all BBs so we need this additional loop
+  uint32_t J = 0;
   for (BasicBlock *BB : AllBBs) {
-    uint64_t ClusterednessSameCountValue = ClusterednessSameCountFromProfile[I++];
-    uint64_t ClusterednessNotSameCountValue = ClusterednessNotSameCountFromProfile[I++];
+    uint64_t ClusterednessSameCountValue = ClusterednessSameCountFromProfile[J];
+    uint64_t ClusterednessNotSameCountValue = ClusterednessNotSameCountFromProfile[J];
     UseBBInfo &Info = getBBInfo(BB);
     Info.setBBInfoSameClusteredness(ClusterednessSameCountValue);
     Info.setBBInfoNotSameClusteredness(ClusterednessNotSameCountValue);
+    J += 1;
   }
-  ProfileCountSize = CountFromProfile.size();
-  CountPosition = I;
+
+  // End Clusteredness
 
   // Set the edge count and update the count of unknown edges for BBs.
   auto setEdgeCount = [this](PGOUseEdge *E, uint64_t Value) -> void {
