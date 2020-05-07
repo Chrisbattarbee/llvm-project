@@ -36,6 +36,7 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSchedule.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/InitializePasses.h"
@@ -1206,6 +1207,13 @@ bool IfConverter::FeasibilityAnalysis(BBInfo &BBI,
   return true;
 }
 
+#define CLUSTEREDNESS_POINT 0.9
+static bool shouldRemovePossibleIfConversionDueToClusteredness(
+    uint64_t ClusterednessSame,
+    uint64_t ClusterednessNotSame) {
+  return ClusterednessSame / (ClusterednessSame + ClusterednessNotSame) >= CLUSTEREDNESS_POINT;
+}
+
 /// Analyze the structure of the sub-CFG starting from the specified block.
 /// Record its successors and whether it looks like an if-conversion candidate.
 void IfConverter::AnalyzeBlock(
@@ -1247,6 +1255,21 @@ void IfConverter::AnalyzeBlock(
         BBI.IsAnalyzed = true;
         BBStack.pop_back();
         continue;
+      }
+
+      // If the selectivity of the basic block is high, do not allow if conversion
+      // TODO: Insert selectivity check here
+      BasicBlock* IRBasicBlock = const_cast<BasicBlock*>(MBB.getBasicBlock());
+      if (IRBasicBlock) {
+        PGOInstrumentationUse::CountsHolder* Counts = PGOInstrumentationUse::CountsMap.at(IRBasicBlock);
+        if (Counts && shouldRemovePossibleIfConversionDueToClusteredness(
+            Counts->ClusterednessSameCountFromProfile,
+            Counts->ClusterednessNotSameCountFromProfile)) {
+          BBI.IsBeingAnalyzed = false;
+          BBI.IsAnalyzed = true;
+          BBStack.pop_back();
+          continue;
+        }
       }
 
       // Do not ifcvt if either path is a back edge to the entry block.

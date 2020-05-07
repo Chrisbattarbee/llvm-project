@@ -19,6 +19,7 @@
 #include "llvm/IR/PassManager.h"
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 
 namespace llvm {
 
@@ -61,6 +62,15 @@ public:
                         std::string RemappingFilename = "", bool IsCS = false);
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+
+  // TODO: This is a filthy dirty hack, remove as soon as possible
+  struct CountsHolder {
+    uint64_t CountFromProfile;
+    uint64_t ClusterednessSameCountFromProfile;
+    uint64_t ClusterednessNotSameCountFromProfile;
+  };
+
+  static std::unordered_map<BasicBlock*, CountsHolder*> CountsMap;
 
 private:
   std::string ProfileFileName;
