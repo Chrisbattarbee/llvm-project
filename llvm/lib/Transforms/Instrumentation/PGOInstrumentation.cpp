@@ -368,6 +368,7 @@ public:
       : ModulePass(ID), IsCS(IsCS) {
     initializePGOInstrumentationGenLegacyPassPass(
         *PassRegistry::getPassRegistry());
+    PGOInstrumentationGen::IsEnabled = true;
   }
 
   StringRef getPassName() const override { return "PGOInstrumentationGenPass"; }
@@ -393,6 +394,7 @@ public:
       ProfileFileName = PGOTestProfileFile;
     initializePGOInstrumentationUseLegacyPassPass(
         *PassRegistry::getPassRegistry());
+    PGOInstrumentationUse::IsEnabled = true;
   }
 
   StringRef getPassName() const override { return "PGOInstrumentationUsePass"; }
@@ -1862,6 +1864,8 @@ PGOInstrumentationUse::PGOInstrumentationUse(std::string Filename,
 }
 
 std::unordered_map<BasicBlock*, PGOInstrumentationUse::CountsHolder*>* PGOInstrumentationUse::CountsMap = nullptr;
+bool PGOInstrumentationUse::IsEnabled = false;
+bool PGOInstrumentationGen::IsEnabled = false;
 
 PreservedAnalyses PGOInstrumentationUse::run(Module &M,
                                              ModuleAnalysisManager &AM) {

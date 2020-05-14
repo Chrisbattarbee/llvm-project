@@ -337,8 +337,10 @@ void PassManagerBuilder::addPGOInstrPasses(legacy::PassManagerBase &MPM,
     MPM.add(createLoopRotatePass());
     MPM.add(createInstrProfilingLegacyPass(Options, IsCS));
   }
-  if (!PGOInstrUse.empty())
+  if (!PGOInstrUse.empty()) {
     MPM.add(createPGOInstrumentationUseLegacyPass(PGOInstrUse, IsCS));
+    MPM.add(createCFGSimplificationPass()); // Use the information of clusteredness to perform select downgrading
+  }
   // Indirect call promotion that promotes intra-module targets only.
   // For ThinLTO this is done earlier due to interactions with globalopt
   // for imported functions. We don't run this at -O0.

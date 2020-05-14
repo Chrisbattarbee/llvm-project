@@ -39,7 +39,6 @@ public:
   PGOInstrumentationGenCreateVar(std::string CSInstrName = "")
       : CSInstrName(CSInstrName) {}
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
-
 private:
   std::string CSInstrName;
 };
@@ -49,6 +48,7 @@ class PGOInstrumentationGen : public PassInfoMixin<PGOInstrumentationGen> {
 public:
   PGOInstrumentationGen(bool IsCS = false) : IsCS(IsCS) {}
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static bool IsEnabled;
 
 private:
   // If this is a context sensitive instrumentation.
@@ -71,6 +71,7 @@ public:
   };
 
   static std::unordered_map<BasicBlock*, CountsHolder*>* CountsMap;
+  static bool IsEnabled;
 
 private:
   std::string ProfileFileName;

@@ -75,6 +75,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <llvm/Transforms/Instrumentation/PGOInstrumentation.h>
 #include <map>
 #include <set>
 #include <tuple>
@@ -2152,6 +2153,13 @@ static bool SpeculativelyExecuteBB(BranchInst *BI, BasicBlock *ThenBB,
   return true;
 }
 
+#define CLUSTEREDNESS_POINT 0.9
+static bool shouldRemovePossibleIfConversionDueToClusteredness(
+    uint64_t ClusterednessSame,
+    uint64_t ClusterednessNotSame) {
+  return ClusterednessSame / (ClusterednessSame + ClusterednessNotSame) >= CLUSTEREDNESS_POINT;
+}
+
 /// Return true if we can thread a branch across this block.
 static bool BlockIsSimpleEnoughToThreadThrough(BasicBlock *BB) {
   unsigned Size = 0;
@@ -2295,6 +2303,10 @@ static bool FoldCondBranchOnPHI(BranchInst *BI, const DataLayout &DL,
   return false;
 }
 
+std::unordered_map<BasicBlock*, PGOInstrumentationUse::CountsHolder*>* PGOInstrumentationUse::CountsMap = nullptr;
+bool PGOInstrumentationUse::IsEnabled = false;
+bool PGOInstrumentationGen::IsEnabled = false;
+
 /// Given a BB that starts with the specified two-entry PHI node,
 /// see if we can eliminate it.
 static bool FoldTwoEntryPHINode(PHINode *PN, const TargetTransformInfo &TTI,
@@ -2407,6 +2419,29 @@ static bool FoldTwoEntryPHINode(PHINode *PN, const TargetTransformInfo &TTI,
         return false;
       }
   }
+
+  // We don't want this optimization if we are profiling because we want to
+  // gather the result of the branch
+  if (PGOInstrumentationGen::IsEnabled) {
+    return false;
+  }
+
+
+  // Don't convert to a select if profiling tells us we have high clusteredness
+  if (PGOInstrumentationUse::IsEnabled) {
+    // We need to wait until our counts have been initialised when the pass is ran
+    if(!PGOInstrumentationUse::CountsMap) {
+      return false;
+    }
+    PGOInstrumentationUse::CountsHolder* Counts = PGOInstrumentationUse::CountsMap->at(DomBlock);
+    if (Counts &&
+        shouldRemovePossibleIfConversionDueToClusteredness(
+            Counts->ClusterednessSameCountFromProfile,
+            Counts->ClusterednessNotSameCountFromProfile
+        )) {
+      return false;
+    }
+  }
   assert(DomBlock && "Failed to find root DomBlock");
 
   LLVM_DEBUG(dbgs() << "FOUND IF CONDITION!  " << *IfCond
@@ -2450,6 +2485,7 @@ static bool FoldTwoEntryPHINode(PHINode *PN, const TargetTransformInfo &TTI,
   OldTI->eraseFromParent();
   return true;
 }
+
 
 /// If we found a conditional branch that goes to two returning blocks,
 /// try to merge them together into one return,
