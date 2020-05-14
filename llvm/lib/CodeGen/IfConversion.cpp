@@ -54,6 +54,7 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 using namespace llvm;
 
@@ -1214,6 +1215,8 @@ static bool shouldRemovePossibleIfConversionDueToClusteredness(
   return ClusterednessSame / (ClusterednessSame + ClusterednessNotSame) >= CLUSTEREDNESS_POINT;
 }
 
+std::unordered_map<BasicBlock*, PGOInstrumentationUse::CountsHolder*>* PGOInstrumentationUse::CountsMap = nullptr;
+
 /// Analyze the structure of the sub-CFG starting from the specified block.
 /// Record its successors and whether it looks like an if-conversion candidate.
 void IfConverter::AnalyzeBlock(
@@ -1261,10 +1264,13 @@ void IfConverter::AnalyzeBlock(
       // TODO: Insert selectivity check here
       BasicBlock* IRBasicBlock = const_cast<BasicBlock*>(MBB.getBasicBlock());
       if (IRBasicBlock) {
-        PGOInstrumentationUse::CountsHolder* Counts = PGOInstrumentationUse::CountsMap.at(IRBasicBlock);
-        if (Counts && shouldRemovePossibleIfConversionDueToClusteredness(
-            Counts->ClusterednessSameCountFromProfile,
-            Counts->ClusterednessNotSameCountFromProfile)) {
+        PGOInstrumentationUse::CountsHolder* Counts = PGOInstrumentationUse::CountsMap->at(IRBasicBlock);
+        if (Counts &&
+            shouldRemovePossibleIfConversionDueToClusteredness(
+              Counts->ClusterednessSameCountFromProfile,
+              Counts->ClusterednessNotSameCountFromProfile
+                )
+            ) {
           BBI.IsBeingAnalyzed = false;
           BBI.IsAnalyzed = true;
           BBStack.pop_back();
@@ -1454,8 +1460,15 @@ void IfConverter::AnalyzeBlock(
 /// Analyze all blocks and find entries for all if-conversion candidates.
 void IfConverter::AnalyzeBlocks(
     MachineFunction &MF, std::vector<std::unique_ptr<IfcvtToken>> &Tokens) {
-  for (MachineBasicBlock &MBB : MF)
+  size_t TSize = Tokens.size();
+  for (MachineBasicBlock &MBB : MF) {
     AnalyzeBlock(MBB, Tokens);
+    std::cout << "Here." << std::endl;
+    if (TSize != Tokens.size()) {
+      std::cout << "Found a valid if conversion candidate." << std::endl;
+      TSize = Tokens.size();
+    }
+  }
 
   // Sort to favor more complex ifcvt scheme.
   llvm::stable_sort(Tokens, IfcvtTokenCmp);

@@ -172,6 +172,8 @@ bool X86CmovConverterPass::runOnMachineFunction(MachineFunction &MF) {
   TRI = STI.getRegisterInfo();
   TSchedModel.init(&STI);
 
+  // Remove all cmovs where the clusteredness of the basic
+
   // Before we handle the more subtle cases of register-register CMOVs inside
   // of potentially hot loops, we want to quickly remove all CMOVs with
   // a memory operand. The CMOV will risk a stall waiting for the load to

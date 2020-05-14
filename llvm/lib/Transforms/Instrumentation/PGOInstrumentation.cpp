@@ -1276,6 +1276,15 @@ bool PGOUseFunc::setInstrumentedCounts(
     UseBBInfo &Info = getBBInfo(BB);
     Info.setBBInfoSameClusteredness(ClusterednessSameCountValue);
     Info.setBBInfoNotSameClusteredness(ClusterednessNotSameCountValue);
+
+    // TODO Fix the memory leak introduced by this
+    if (!PGOInstrumentationUse::CountsMap) {
+      PGOInstrumentationUse::CountsMap = new std::unordered_map<BasicBlock*, PGOInstrumentationUse::CountsHolder*>();
+    }
+    PGOInstrumentationUse::CountsHolder* CHolder = new PGOInstrumentationUse::CountsHolder;
+    CHolder->ClusterednessSameCountFromProfile = ClusterednessSameCountValue;
+    CHolder->ClusterednessNotSameCountFromProfile = ClusterednessNotSameCountValue;
+    PGOInstrumentationUse::CountsMap->insert({BB, CHolder});
     J += 1;
   }
 
@@ -1851,6 +1860,8 @@ PGOInstrumentationUse::PGOInstrumentationUse(std::string Filename,
   if (!PGOTestProfileRemappingFile.empty())
     ProfileRemappingFileName = PGOTestProfileRemappingFile;
 }
+
+std::unordered_map<BasicBlock*, PGOInstrumentationUse::CountsHolder*>* PGOInstrumentationUse::CountsMap = nullptr;
 
 PreservedAnalyses PGOInstrumentationUse::run(Module &M,
                                              ModuleAnalysisManager &AM) {

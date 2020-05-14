@@ -70,7 +70,7 @@ public:
     uint64_t ClusterednessNotSameCountFromProfile;
   };
 
-  static std::unordered_map<BasicBlock*, CountsHolder*> CountsMap;
+  static std::unordered_map<BasicBlock*, CountsHolder*>* CountsMap;
 
 private:
   std::string ProfileFileName;
