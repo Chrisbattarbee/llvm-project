@@ -115,6 +115,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <numeric>
 #include <string>
@@ -550,6 +551,10 @@ public:
   // InstrumentBBs.
   void getInstrumentBBs(std::vector<BasicBlock *> &InstrumentBBs);
 
+  // Store all BBs from the CFG in AllBBs
+  void getAllBBs(std::vector<BasicBlock *> &AllBBs);
+
+
   // Give an edge, find the BB that will be instrumented.
   // Return nullptr if there is no BB to be instrumented.
   BasicBlock *getInstrBB(Edge *E);
@@ -575,6 +580,7 @@ public:
         ValueSites(IPVK_Last + 1), SIVisitor(Func), MST(F, BPI, BFI) {
     // This should be done before CFG hash computation.
     SIVisitor.countSelects(Func);
+    ValueSites[IPVK_MemOPSize] = VPC.get(IPVK_MemOPSize);
     ValueSites[IPVK_MemOPSize] = VPC.get(IPVK_MemOPSize);
     if (!IsCS) {
       NumOfPGOSelectInsts += SIVisitor.getNumOfSelectInsts();
@@ -832,6 +838,23 @@ populateEHOperandBundle(VPCandidateInfo &Cand,
   }
 }
 
+template <class Edge, class BBInfo>
+void FuncPGOInstrumentation<Edge, BBInfo>::getAllBBs(
+    std::vector<BasicBlock *> &InstrumentBBs) {
+  std::set<BasicBlock*> BBSet;
+  for (auto &E : MST.AllEdges) {
+    if (E->SrcBB) {
+      BBSet.insert(const_cast<BasicBlock*>(E->SrcBB));
+    }
+    if (E->DestBB) {
+      BBSet.insert(const_cast<BasicBlock*>(E->DestBB));
+    }
+  }
+  for (auto *BB: BBSet) {
+    InstrumentBBs.push_back(BB);
+  }
+}
+
 // Visit all edge and instrument the edges not in MST, and do value profiling.
 // Critical edges will be split.
 static void instrumentOneFunc(
@@ -869,6 +892,42 @@ static void instrumentOneFunc(
 
   if (DisableValueProfiling)
     return;
+
+
+  // First pass to enumerate the number of GEPs in this function that we need
+  // to instrument
+  std::vector<BasicBlock *> AllBBs;
+  int NumGepInstructions = 0;
+  FuncInfo.getAllBBs(AllBBs);
+  for (auto* BB : AllBBs) {
+    auto DI = BB->begin();
+    while (DI != BB->end()) {
+      if (isa<GetElementPtrInst>(DI)) {
+        NumGepInstructions ++;
+      }
+    }
+  }
+
+  // Add our GEP Intrinsic
+  // TODO MAKE SURE THAT THIS TRAVERSAL ORDERING IS UNIQUE OTHERWISE ON USE
+  // TODO RUN WE MAY BE UTILISING THE WRONG VALUE PROFILES
+  int GepPlacement  = 0;
+  for (auto* BB : AllBBs) {
+    auto DI = BB->begin();
+    while (DI != BB->end()) {
+      if (isa<GetElementPtrInst>(DI)) {
+        std::cout << "Found GEP instruction to instrument with VP" << std::endl;
+        IRBuilder<> Builder(BB, DI);
+        Builder.CreateCall(
+            Intrinsic::getDeclaration(M, Intrinsic::vp_gep),
+            {ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
+             Builder.getInt64(FuncInfo.FunctionHash), Builder.getInt32(NumGepInstructions),
+             Builder.getInt32(GepPlacement)});
+        GepPlacement ++;
+      }
+      DI++;
+    }
+  }
 
   NumOfPGOICall += FuncInfo.ValueSites[IPVK_IndirectCallTarget].size();
 

@@ -854,6 +854,35 @@ namespace llvm {
     }
   };
 
+
+/// This represents the llvm.vp_gep intrinsic.
+class InstrVPGep : public IntrinsicInst {
+public:
+  static bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::vp_gep;
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  GlobalVariable *getName() const {
+    return cast<GlobalVariable>(
+        const_cast<Value *>(getArgOperand(0))->stripPointerCasts());
+  }
+
+  ConstantInt *getHash() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(1)));
+  }
+
+  ConstantInt *getNumCounters() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(2)));
+  }
+
+  ConstantInt *getSelfIndex() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(3)));
+  }
+};
+
   /// This represents the llvm.instrprof_value_profile intrinsic.
   class InstrProfValueProfileInst : public IntrinsicInst {
   public:
