@@ -132,6 +132,7 @@ using VPCandidateInfo = ValueProfileCollector::CandidateInfo;
 STATISTIC(NumOfPGOInstrument, "Number of edges instrumented.");
 STATISTIC(NumOfPGOSelectInsts, "Number of select instruction instrumented.");
 STATISTIC(NumOfPGOMemIntrinsics, "Number of mem intrinsics instrumented.");
+STATISTIC(NumOfPGOGepOffsets, "Number of gep offsets instrumented.");
 STATISTIC(NumOfPGOEdge, "Number of edges.");
 STATISTIC(NumOfPGOBB, "Number of basic-blocks.");
 STATISTIC(NumOfPGOSplit, "Number of critical edge splits.");
@@ -581,14 +582,17 @@ public:
     // This should be done before CFG hash computation.
     SIVisitor.countSelects(Func);
     ValueSites[IPVK_MemOPSize] = VPC.get(IPVK_MemOPSize);
+    ValueSites[IPVK_GepOffset] = VPC.get(IPVK_GepOffset);
     if (!IsCS) {
       NumOfPGOSelectInsts += SIVisitor.getNumOfSelectInsts();
       NumOfPGOMemIntrinsics += ValueSites[IPVK_MemOPSize].size();
+      NumOfPGOGepOffsets += ValueSites[IPVK_GepOffset].size();
       NumOfPGOBB += MST.BBInfos.size();
       ValueSites[IPVK_IndirectCallTarget] = VPC.get(IPVK_IndirectCallTarget);
     } else {
       NumOfCSPGOSelectInsts += SIVisitor.getNumOfSelectInsts();
       NumOfCSPGOMemIntrinsics += ValueSites[IPVK_MemOPSize].size();
+      NumOfPGOGepOffsets += ValueSites[IPVK_GepOffset].size();
       NumOfCSPGOBB += MST.BBInfos.size();
     }
 
@@ -892,51 +896,6 @@ static void instrumentOneFunc(
   if (DisableValueProfiling)
     return;
 
-
-  // First pass to enumerate the number of GEPs in this function that we need
-  // to instrument
-  std::vector<BasicBlock *> AllBBs;
-  int NumGepInstructions = 0;
-  FuncInfo.getAllBBs(AllBBs);
-  for (auto* BB : AllBBs) {
-    auto DI = BB->begin();
-    while (DI != BB->end()) {
-      if (isa<GetElementPtrInst>(DI)) {
-        NumGepInstructions ++;
-      }
-      DI++;
-    }
-  }
-
-  // Add our GEP Intrinsic
-  // TODO MAKE SURE THAT THIS TRAVERSAL ORDERING IS UNIQUE OTHERWISE ON USE
-  // TODO RUN WE MAY BE UTILISING THE WRONG VALUE PROFILES
-  int GepPlacement  = 0;
-  for (auto* BB : AllBBs) {
-    auto DI = BB->begin();
-    while (DI != BB->end()) {
-      if (isa<GetElementPtrInst>(DI)) {
-        std::cout << "Found GEP instruction to instrument with VP" << std::endl;
-        IRBuilder<> Builder(BB, DI);
-        GetElementPtrInst* GepInst = dyn_cast<GetElementPtrInst>(DI);
-        Value* Offset = GepInst->idx_begin()->get();
-
-//        Value* ToProfile = Builder.CreateZExtOrTrunc(Offset, Builder.getInt64Ty());
-
-        Builder.CreateCall(
-            Intrinsic::getDeclaration(M, Intrinsic::vp_gep),
-            {ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
-             Builder.getInt64(FuncInfo.FunctionHash), Offset,
-             Builder.getInt64(NumGepInstructions),
-             Builder.getInt64(GepPlacement),
-             Builder.getInt32(GepPlacement)
-            });
-        GepPlacement ++;
-      }
-      DI++;
-    }
-  }
-
   NumOfPGOICall += FuncInfo.ValueSites[IPVK_IndirectCallTarget].size();
 
   // Intrinsic function calls do not have funclet operand bundles needed for
@@ -958,25 +917,41 @@ static void instrumentOneFunc(
       LLVM_DEBUG(dbgs() << "Instrument one VP " << ValueProfKindDescr[Kind]
                         << " site: CallSite Index = " << SiteIndex << "\n");
 
-      IRBuilder<> Builder(Cand.InsertPt);
-      assert(Builder.GetInsertPoint() != Cand.InsertPt->getParent()->end() &&
-             "Cannot get the Instrumentation point");
+      // Deal with the special snowflake case because we are double intrinsic lowering
+      if (Kind == IPVK_GepOffset) {
+        GetElementPtrInst* GepInst = dyn_cast<GetElementPtrInst>(Cand.AnnotatedInst);
+        Value* Offset = GepInst->idx_begin()->get();
+        IRBuilder<> Builder(GepInst);
+        Builder.CreateCall(
+            Intrinsic::getDeclaration(M, Intrinsic::vp_gep),
+            {ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
+             Builder.getInt64(FuncInfo.FunctionHash), Offset,
+             Builder.getInt64(FuncInfo.ValueSites[Kind].size()),
+             Builder.getInt64(SiteIndex),
+             Builder.getInt32(SiteIndex)
+            });
+      } else {
 
-      Value *ToProfile = nullptr;
-      if (Cand.V->getType()->isIntegerTy())
-        ToProfile = Builder.CreateZExtOrTrunc(Cand.V, Builder.getInt64Ty());
-      else if (Cand.V->getType()->isPointerTy())
-        ToProfile = Builder.CreatePtrToInt(Cand.V, Builder.getInt64Ty());
-      assert(ToProfile && "value profiling Value is of unexpected type");
+        IRBuilder<> Builder(Cand.InsertPt);
+        assert(Builder.GetInsertPoint() != Cand.InsertPt->getParent()->end() &&
+               "Cannot get the Instrumentation point");
 
-      SmallVector<OperandBundleDef, 1> OpBundles;
-      populateEHOperandBundle(Cand, BlockColors, OpBundles);
-      Builder.CreateCall(
-          Intrinsic::getDeclaration(M, Intrinsic::instrprof_value_profile),
-          {ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
-           Builder.getInt64(FuncInfo.FunctionHash), ToProfile,
-           Builder.getInt32(Kind), Builder.getInt32(SiteIndex++)},
-          OpBundles);
+        Value *ToProfile = nullptr;
+        if (Cand.V->getType()->isIntegerTy())
+          ToProfile = Builder.CreateZExtOrTrunc(Cand.V, Builder.getInt64Ty());
+        else if (Cand.V->getType()->isPointerTy())
+          ToProfile = Builder.CreatePtrToInt(Cand.V, Builder.getInt64Ty());
+        assert(ToProfile && "value profiling Value is of unexpected type");
+
+        SmallVector<OperandBundleDef, 1> OpBundles;
+        populateEHOperandBundle(Cand, BlockColors, OpBundles);
+        Builder.CreateCall(
+            Intrinsic::getDeclaration(M, Intrinsic::instrprof_value_profile),
+            {ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
+             Builder.getInt64(FuncInfo.FunctionHash), ToProfile,
+             Builder.getInt32(Kind), Builder.getInt32(SiteIndex++)},
+            OpBundles);
+      }
     }
   } // IPVK_First <= Kind <= IPVK_Last
 }

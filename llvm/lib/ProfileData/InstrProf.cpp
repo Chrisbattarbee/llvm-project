@@ -1254,6 +1254,9 @@ void OverlapStats::dump(raw_fd_ostream &OS) const {
     case IPVK_MemOPSize:
       strncpy(ProfileKindName, "MemOP", 19);
       break;
+    case IPVK_GepOffset:
+      strncpy(ProfileKindName, "GetOffset", 19);
+      break;
     default:
       snprintf(ProfileKindName, 19, "VP[%d]", I);
       break;

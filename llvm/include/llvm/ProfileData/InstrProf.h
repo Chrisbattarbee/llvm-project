@@ -790,6 +790,7 @@ private:
   struct ValueProfData {
     std::vector<InstrProfValueSiteRecord> IndirectCallSites;
     std::vector<InstrProfValueSiteRecord> MemOPSizes;
+    std::vector<InstrProfValueSiteRecord> GepOffsets;
   };
   std::unique_ptr<ValueProfData> ValueData;
 
@@ -812,6 +813,8 @@ private:
       return ValueData->IndirectCallSites;
     case IPVK_MemOPSize:
       return ValueData->MemOPSizes;
+    case IPVK_GepOffset:
+      return ValueData->GepOffsets;
     default:
       llvm_unreachable("Unknown value kind!");
     }
@@ -826,6 +829,8 @@ private:
       return ValueData->IndirectCallSites;
     case IPVK_MemOPSize:
       return ValueData->MemOPSizes;
+    case IPVK_GepOffset:
+      return ValueData->GepOffsets;
     default:
       llvm_unreachable("Unknown value kind!");
     }

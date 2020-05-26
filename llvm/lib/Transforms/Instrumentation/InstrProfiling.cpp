@@ -809,7 +809,7 @@ void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
           VPGep->getArgOperand(0),
           VPGep->getArgOperand(1),
           StrideExtended,
-          Builder.getInt32(0),
+          Builder.getInt32(IPVK_GepOffset),
           VPGep->getArgOperand(5)},
       OpBundles);
 

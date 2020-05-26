@@ -16,6 +16,7 @@
 #include "ValueProfileCollector.h"
 #include "llvm/Analysis/IndirectCallVisitor.h"
 #include "llvm/IR/InstVisitor.h"
+#include <iostream>
 
 using namespace llvm;
 using CandidateInfo = ValueProfileCollector::CandidateInfo;
@@ -67,9 +68,36 @@ public:
   }
 };
 
+
+///------------------------ GepOffsetPlugin ------------------------
+class GepOffsetPlugin {
+  Function &F;
+
+public:
+  static constexpr InstrProfValueKind Kind = IPVK_GepOffset;
+
+  GepOffsetPlugin(Function &Fn) : F(Fn) {}
+
+  void run(std::vector<CandidateInfo> &Candidates) {
+    auto BB = F.begin();
+    while(BB != F.end()) {
+      auto I = BB->begin();
+      while (I != BB->end()){
+        if (GetElementPtrInst* GepInst = dyn_cast<GetElementPtrInst>(I)) {
+          std::cout << "Found GEP instruction to instrument with VP" << std::endl;
+          Candidates.emplace_back(CandidateInfo{GepInst, GepInst, GepInst});
+        }
+        I++;
+      }
+      BB++;
+    }
+  }
+};
+
 ///----------------------- Registration of the plugins -------------------------
 /// For now, registering a plugin with the ValueProfileCollector is done by
 /// adding the plugin type to the VP_PLUGIN_LIST macro.
 #define VP_PLUGIN_LIST           \
     MemIntrinsicPlugin,          \
-    IndirectCallPromotionPlugin
+    IndirectCallPromotionPlugin,  \
+    GepOffsetPlugin

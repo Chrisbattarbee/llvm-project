@@ -926,6 +926,13 @@ static int showInstrProfile(const std::string &Filename, bool ShowCounts,
         OS << "    Number of Memory Intrinsics Calls: " << NumMemOPCalls
            << "\n";
 
+
+      uint32_t NumGepOffsets = Func.getNumValueSites(IPVK_MemOPSize);
+      if (NumGepOffsets > 0) {
+        OS << "    Number of Memory Intrinsics Calls: " << NumMemOPCalls
+           << "\n";
+      }
+
       if (ShowCounts) {
         OS << "    Block counts: [";
         size_t Start = (IsIRInstr ? 0 : 1);
@@ -945,6 +952,11 @@ static int showInstrProfile(const std::string &Filename, bool ShowCounts,
       if (ShowMemOPSizes && NumMemOPCalls > 0) {
         OS << "    Memory Intrinsic Size Results:\n";
         traverseAllValueSites(Func, IPVK_MemOPSize, VPStats[IPVK_MemOPSize], OS,
+                              nullptr);
+      }
+      if (NumGepOffsets > 0) {
+        OS << "    Memory Intrinsic Size Results:\n";
+        traverseAllValueSites(Func, IPVK_GepOffset, VPStats[IPVK_GepOffset], OS,
                               nullptr);
       }
     }
@@ -990,6 +1002,11 @@ static int showInstrProfile(const std::string &Filename, bool ShowCounts,
   if (ShownFunctions && ShowMemOPSizes) {
     OS << "Statistics for memory intrinsic calls sizes profile:\n";
     showValueSitesStats(OS, IPVK_MemOPSize, VPStats[IPVK_MemOPSize]);
+  }
+
+  if (ShownFunctions) {
+    OS << "Statistics for gep offsets profile:\n";
+    showValueSitesStats(OS, IPVK_GepOffset, VPStats[IPVK_GepOffset]);
   }
 
   if (ShowDetailedSummary) {
