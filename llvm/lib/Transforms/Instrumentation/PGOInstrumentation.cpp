@@ -581,7 +581,6 @@ public:
     // This should be done before CFG hash computation.
     SIVisitor.countSelects(Func);
     ValueSites[IPVK_MemOPSize] = VPC.get(IPVK_MemOPSize);
-    ValueSites[IPVK_MemOPSize] = VPC.get(IPVK_MemOPSize);
     if (!IsCS) {
       NumOfPGOSelectInsts += SIVisitor.getNumOfSelectInsts();
       NumOfPGOMemIntrinsics += ValueSites[IPVK_MemOPSize].size();

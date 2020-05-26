@@ -734,7 +734,11 @@ void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
   Value *Stride = Builder.CreateSub(VPGep->getOffset(), LastOffset, "Stride");
 
   // TODO INSERT VALUE PROFILING CALL HERE
+
+
+
   std::cout << "Lowered VPGep Instance " << std::endl;
+  VPGep->eraseFromParent();
 }
 
 void InstrProfiling::lowerValueProfileInst(InstrProfValueProfileInst *Ind) {
