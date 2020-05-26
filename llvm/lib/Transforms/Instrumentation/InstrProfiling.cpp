@@ -52,6 +52,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <iostream>
 
 using namespace llvm;
 
@@ -83,10 +84,10 @@ cl::opt<bool> DoHashBasedCounterSplit(
     cl::desc("Rename counter variable of a comdat function based on cfg hash"),
     cl::init(true));
 
-cl::opt<bool> RuntimeCounterRelocation(
-    "runtime-counter-relocation",
-    cl::desc("Enable relocating counters at runtime."),
-    cl::init(false));
+cl::opt<bool>
+    RuntimeCounterRelocation("runtime-counter-relocation",
+                             cl::desc("Enable relocating counters at runtime."),
+                             cl::init(false));
 
 cl::opt<bool> ValueProfileStaticAlloc(
     "vp-static-alloc",
@@ -147,6 +148,23 @@ cl::opt<bool> SpeculativeCounterPromotionToLoop(
 cl::opt<bool> IterativeCounterPromotion(
     cl::ZeroOrMore, "iterative-counter-promotion", cl::init(true),
     cl::desc("Allow counter promotion across the whole loop nest."));
+
+/// Get the name of a profiling variable for a particular function.
+template <class InstructionInstance>
+static std::string getVarName(InstructionInstance *Instr, StringRef Prefix) {
+  StringRef NamePrefix = getInstrProfNameVarPrefix();
+  StringRef Name = Instr->getName()->getName().substr(NamePrefix.size());
+  Function *F = Instr->getParent()->getParent();
+  Module *M = F->getParent();
+  if (!DoHashBasedCounterSplit || !isIRPGOFlagSet(M) ||
+      !canRenameComdatFunc(*F))
+    return (Prefix + Name).str();
+  uint64_t FuncHash = Instr->getHash()->getZExtValue();
+  SmallVector<char, 24> HashPostfix;
+  if (Name.endswith((Twine(".") + Twine(FuncHash)).toStringRef(HashPostfix)))
+    return (Prefix + Name).str();
+  return (Prefix + Name + "." + Twine(FuncHash)).str();
+}
 
 class InstrProfilingLegacyPass : public ModulePass {
   InstrProfiling InstrProf;
@@ -325,8 +343,9 @@ private:
 
   // Check whether the loop satisfies the basic conditions needed to perform
   // Counter Promotions.
-  bool isPromotionPossible(Loop *LP,
-                           const SmallVectorImpl<BasicBlock *> &LoopExitBlocks) {
+  bool
+  isPromotionPossible(Loop *LP,
+                      const SmallVectorImpl<BasicBlock *> &LoopExitBlocks) {
     // We can't insert into a catchswitch.
     if (llvm::any_of(LoopExitBlocks, [](BasicBlock *Exit) {
           return isa<CatchSwitchInst>(Exit->getTerminator());
@@ -406,13 +425,13 @@ PreservedAnalyses InstrProfiling::run(Module &M, ModuleAnalysisManager &AM) {
 }
 
 char InstrProfilingLegacyPass::ID = 0;
-INITIALIZE_PASS_BEGIN(
-    InstrProfilingLegacyPass, "instrprof",
-    "Frontend instrumentation-based coverage lowering.", false, false)
+INITIALIZE_PASS_BEGIN(InstrProfilingLegacyPass, "instrprof",
+                      "Frontend instrumentation-based coverage lowering.",
+                      false, false)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
-INITIALIZE_PASS_END(
-    InstrProfilingLegacyPass, "instrprof",
-    "Frontend instrumentation-based coverage lowering.", false, false)
+INITIALIZE_PASS_END(InstrProfilingLegacyPass, "instrprof",
+                    "Frontend instrumentation-based coverage lowering.", false,
+                    false)
 
 ModulePass *
 llvm::createInstrProfilingLegacyPass(const InstrProfOptions &Options,
@@ -440,6 +459,8 @@ bool InstrProfiling::lowerIntrinsics(Function *F) {
       } else if (auto *Ind = dyn_cast<InstrProfValueProfileInst>(Instr)) {
         lowerValueProfileInst(Ind);
         MadeChange = true;
+      } else if (auto *Gep = dyn_cast<InstrVPGepInst>(Instr)) {
+        lowerVPGepInst(Gep);
       }
     }
   }
@@ -621,6 +642,101 @@ void InstrProfiling::computeNumValueSiteCounts(InstrProfValueProfileInst *Ind) {
     It->second.NumValueSites[ValueKind] = Index + 1;
 }
 
+GlobalVariable *
+InstrProfiling::getOrCreateGepLastOffsetCounters(InstrVPGepInst *VPGep) {
+  GlobalVariable *NamePtr = VPGep->getName();
+  auto It = ProfileDataMap.find(NamePtr);
+  PerFunctionProfileData PD;
+  if (It != ProfileDataMap.end()) {
+    if (It->second.LastGepOffsetCounters)
+      return It->second.LastGepOffsetCounters;
+    PD = It->second;
+  }
+
+  // Match the linkage and visibility of the name global. COFF supports using
+  // comdats with internal symbols, so do that if we can.
+  Function *Fn = VPGep->getParent()->getParent();
+  GlobalValue::LinkageTypes Linkage = NamePtr->getLinkage();
+  GlobalValue::VisibilityTypes Visibility = NamePtr->getVisibility();
+  if (TT.isOSBinFormatCOFF()) {
+    Linkage = GlobalValue::InternalLinkage;
+    Visibility = GlobalValue::DefaultVisibility;
+  }
+
+  // Move the name variable to the right section. Place them in a COMDAT group
+  // if the associated function is a COMDAT. This will make sure that only one
+  // copy of counters of the COMDAT function will be emitted after linking. Keep
+  // in mind that this pass may run before the inliner, so we need to create a
+  // new comdat group for the counters and profiling data. If we use the comdat
+  // of the parent function, that will result in relocations against discarded
+  // sections.
+  bool NeedComdat = needsComdatForCounter(*Fn, *M);
+  if (NeedComdat) {
+    if (TT.isOSBinFormatCOFF()) {
+      // For COFF, put the counters, data, and values each into their own
+      // comdats. We can't use a group because the Visual C++ linker will
+      // report duplicate symbol errors if there are multiple external symbols
+      // with the same name marked IMAGE_COMDAT_SELECT_ASSOCIATIVE.
+      Linkage = GlobalValue::LinkOnceODRLinkage;
+      Visibility = GlobalValue::HiddenVisibility;
+    }
+  }
+  auto MaybeSetComdat = [=](GlobalVariable *GV) {
+    if (NeedComdat)
+      GV->setComdat(M->getOrInsertComdat(GV->getName()));
+  };
+
+  uint64_t NumCounters = VPGep->getNumCounters()->getZExtValue();
+  LLVMContext &Ctx = M->getContext();
+  ArrayType *CounterTy = ArrayType::get(Type::getInt64Ty(Ctx), NumCounters);
+
+  // Create the counters variable.
+  auto *LastGepOffsetCounterPtr = new GlobalVariable(
+      *M, CounterTy, false, Linkage, Constant::getNullValue(CounterTy),
+      getVarName(VPGep, getGepOffsetCountersVarPrefix()));
+  LastGepOffsetCounterPtr->setVisibility(Visibility);
+  LastGepOffsetCounterPtr->setSection(
+      getInstrProfSectionName(IPSK_Gep_Offset, TT.getObjectFormat()));
+  LastGepOffsetCounterPtr->setAlignment(Align(8));
+  MaybeSetComdat(LastGepOffsetCounterPtr);
+  LastGepOffsetCounterPtr->setLinkage(Linkage);
+
+  PD.LastGepOffsetCounters = LastGepOffsetCounterPtr;
+  ProfileDataMap[NamePtr] = PD;
+
+  // Now that the linkage set by the FE has been passed to the data and counter
+  // variables, reset Name variable's linkage and visibility to private so that
+  // it can be removed later by the compiler.
+  NamePtr->setLinkage(GlobalValue::PrivateLinkage);
+  // Collect the referenced names to be used by emitNameData.
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) ==
+      ReferencedNames.end()) {
+    ReferencedNames.push_back(NamePtr);
+  }
+
+  return LastGepOffsetCounterPtr;
+}
+
+void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
+  GlobalVariable *LastGepOffsetCounters =
+      getOrCreateGepLastOffsetCounters(VPGep);
+
+  IRBuilder<> Builder(VPGep);
+
+  IntegerType *Type = VPGep->getSelfIndex()->getType();
+
+  // Get the last offset
+  Value *LastOffsetAddr = Builder.CreateInBoundsGEP(
+      LastGepOffsetCounters->getValueType(), LastGepOffsetCounters,
+      {ConstantInt::get(Type, 0), VPGep->getSelfIndex()}, "LastOffsetAddress");
+  Value *LastOffset =
+      Builder.CreateLoad(Type, LastOffsetAddr, "LastOffset");
+  Value *Stride = Builder.CreateSub(VPGep->getOffset(), LastOffset, "Stride");
+
+  // TODO INSERT VALUE PROFILING CALL HERE
+  std::cout << "Lowered VPGep Instance " << std::endl;
+}
+
 void InstrProfiling::lowerValueProfileInst(InstrProfValueProfileInst *Ind) {
   GlobalVariable *Name = Ind->getName();
   auto It = ProfileDataMap.find(Name);
@@ -685,11 +801,12 @@ void InstrProfiling::lowerIncrement(InstrProfIncrementInst *Inc) {
     if (!LI) {
       IRBuilder<> Builder(&I);
       Type *Int64Ty = Type::getInt64Ty(M->getContext());
-      GlobalVariable *Bias = M->getGlobalVariable(getInstrProfCounterBiasVarName());
+      GlobalVariable *Bias =
+          M->getGlobalVariable(getInstrProfCounterBiasVarName());
       if (!Bias) {
-        Bias = new GlobalVariable(*M, Int64Ty, false, GlobalValue::LinkOnceODRLinkage,
-                                  Constant::getNullValue(Int64Ty),
-                                  getInstrProfCounterBiasVarName());
+        Bias = new GlobalVariable(
+            *M, Int64Ty, false, GlobalValue::LinkOnceODRLinkage,
+            Constant::getNullValue(Int64Ty), getInstrProfCounterBiasVarName());
         Bias->setVisibility(GlobalVariable::HiddenVisibility);
       }
       LI = Builder.CreateLoad(Int64Ty, Bias);
@@ -728,22 +845,6 @@ void InstrProfiling::lowerCoverageData(GlobalVariable *CoverageNamesVar) {
   CoverageNamesVar->eraseFromParent();
 }
 
-/// Get the name of a profiling variable for a particular function.
-static std::string getVarName(InstrProfIncrementInst *Inc, StringRef Prefix) {
-  StringRef NamePrefix = getInstrProfNameVarPrefix();
-  StringRef Name = Inc->getName()->getName().substr(NamePrefix.size());
-  Function *F = Inc->getParent()->getParent();
-  Module *M = F->getParent();
-  if (!DoHashBasedCounterSplit || !isIRPGOFlagSet(M) ||
-      !canRenameComdatFunc(*F))
-    return (Prefix + Name).str();
-  uint64_t FuncHash = Inc->getHash()->getZExtValue();
-  SmallVector<char, 24> HashPostfix;
-  if (Name.endswith((Twine(".") + Twine(FuncHash)).toStringRef(HashPostfix)))
-    return (Prefix + Name).str();
-  return (Prefix + Name + "." + Twine(FuncHash)).str();
-}
-
 static inline bool shouldRecordFunctionAddr(Function *F) {
   // Check the linkage
   bool HasAvailableExternallyLinkage = F->hasAvailableExternallyLinkage();
@@ -780,8 +881,7 @@ static bool needsRuntimeRegistrationOfSectionRange(const Triple &TT) {
     return false;
   // Use linker script magic to get data/cnts/name start/end.
   if (TT.isOSLinux() || TT.isOSFreeBSD() || TT.isOSNetBSD() ||
-      TT.isOSSolaris() || TT.isOSFuchsia() || TT.isPS4CPU() ||
-      TT.isOSWindows())
+      TT.isOSSolaris() || TT.isOSFuchsia() || TT.isPS4CPU() || TT.isOSWindows())
     return false;
 
   return true;
@@ -836,10 +936,9 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
   ArrayType *CounterTy = ArrayType::get(Type::getInt64Ty(Ctx), NumCounters);
 
   // Create the counters variable.
-  auto *CounterPtr =
-      new GlobalVariable(*M, CounterTy, false, Linkage,
-                         Constant::getNullValue(CounterTy),
-                         getVarName(Inc, getInstrProfCountersVarPrefix()));
+  auto *CounterPtr = new GlobalVariable(
+      *M, CounterTy, false, Linkage, Constant::getNullValue(CounterTy),
+      getVarName(Inc, getInstrProfCountersVarPrefix()));
   CounterPtr->setVisibility(Visibility);
   CounterPtr->setSection(
       getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
@@ -858,10 +957,9 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
     if (NS) {
       ArrayType *ValuesTy = ArrayType::get(Type::getInt64Ty(Ctx), NS);
 
-      auto *ValuesVar =
-          new GlobalVariable(*M, ValuesTy, false, Linkage,
-                             Constant::getNullValue(ValuesTy),
-                             getVarName(Inc, getInstrProfValuesVarPrefix()));
+      auto *ValuesVar = new GlobalVariable(
+          *M, ValuesTy, false, Linkage, Constant::getNullValue(ValuesTy),
+          getVarName(Inc, getInstrProfValuesVarPrefix()));
       ValuesVar->setVisibility(Visibility);
       ValuesVar->setSection(
           getInstrProfSectionName(IPSK_vals, TT.getObjectFormat()));
@@ -978,8 +1076,8 @@ void InstrProfiling::emitNameData() {
   }
 
   auto &Ctx = M->getContext();
-  auto *NamesVal = ConstantDataArray::getString(
-      Ctx, StringRef(CompressedNameStr), false);
+  auto *NamesVal =
+      ConstantDataArray::getString(Ctx, StringRef(CompressedNameStr), false);
   NamesVar = new GlobalVariable(*M, NamesVal->getType(), true,
                                 GlobalValue::PrivateLinkage, NamesVal,
                                 getInstrProfNamesVarName());

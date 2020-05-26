@@ -856,7 +856,7 @@ namespace llvm {
 
 
 /// This represents the llvm.vp_gep intrinsic.
-class InstrVPGep : public IntrinsicInst {
+class InstrVPGepInst : public IntrinsicInst {
 public:
   static bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::vp_gep;
@@ -874,12 +874,16 @@ public:
     return cast<ConstantInt>(const_cast<Value *>(getArgOperand(1)));
   }
 
+  Value *getOffset() const {
+    return cast<Value>(const_cast<Value *>(getArgOperand(2)));
+  }
+
   ConstantInt *getNumCounters() const {
-    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(2)));
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(3)));
   }
 
   ConstantInt *getSelfIndex() const {
-    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(3)));
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(4)));
   }
 };
 

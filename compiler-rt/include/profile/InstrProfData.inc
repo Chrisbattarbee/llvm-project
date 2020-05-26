@@ -258,6 +258,9 @@ INSTR_PROF_SECT_ENTRY(IPSK_cnts, \
 INSTR_PROF_SECT_ENTRY(IPSK_name, \
                       INSTR_PROF_QUOTE(INSTR_PROF_NAME_COMMON), \
                       INSTR_PROF_NAME_COFF, "__DATA,")
+INSTR_PROF_SECT_ENTRY(IPSK_Gep_Offset, \
+                      INSTR_PROF_QUOTE(GEP_OFFSET_COMMON), \
+                      INSTR_PROF_NAME_COFF, "__DATA,")
 INSTR_PROF_SECT_ENTRY(IPSK_vals, \
                       INSTR_PROF_QUOTE(INSTR_PROF_VALS_COMMON), \
                       INSTR_PROF_VALS_COFF, "__DATA,")

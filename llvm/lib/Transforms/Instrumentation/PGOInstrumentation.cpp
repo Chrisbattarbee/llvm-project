@@ -905,6 +905,7 @@ static void instrumentOneFunc(
       if (isa<GetElementPtrInst>(DI)) {
         NumGepInstructions ++;
       }
+      DI++;
     }
   }
 
@@ -918,11 +919,15 @@ static void instrumentOneFunc(
       if (isa<GetElementPtrInst>(DI)) {
         std::cout << "Found GEP instruction to instrument with VP" << std::endl;
         IRBuilder<> Builder(BB, DI);
+        GetElementPtrInst* GepInst = dyn_cast<GetElementPtrInst>(DI);
+        Value* Offset = GepInst->idx_begin()->get();
+
+        Value* ToProfile = Builder.CreateZExtOrTrunc(Offset, Builder.getInt64Ty());
         Builder.CreateCall(
             Intrinsic::getDeclaration(M, Intrinsic::vp_gep),
             {ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
-             Builder.getInt64(FuncInfo.FunctionHash), Builder.getInt32(NumGepInstructions),
-             Builder.getInt32(GepPlacement)});
+             Builder.getInt64(FuncInfo.FunctionHash), Offset,
+             Builder.getInt64(NumGepInstructions), Builder.getInt64(GepPlacement)});
         GepPlacement ++;
       }
       DI++;
