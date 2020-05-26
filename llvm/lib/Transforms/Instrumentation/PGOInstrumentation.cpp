@@ -927,8 +927,9 @@ static void instrumentOneFunc(
             Intrinsic::getDeclaration(M, Intrinsic::vp_gep),
             {ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
              Builder.getInt64(FuncInfo.FunctionHash), Offset,
-             Builder.getInt64(NumGepInstructions), Builder.getInt64(GepPlacement),
-                Builder.getInt32(GepPlacement)
+             Builder.getInt64(NumGepInstructions),
+             Builder.getInt64(GepPlacement),
+             Builder.getInt32(GepPlacement)
             });
         GepPlacement ++;
       }
