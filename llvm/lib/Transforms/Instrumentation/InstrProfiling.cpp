@@ -781,7 +781,12 @@ void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
       {ConstantInt::get(Type, 0), VPGep->getSelfIndex()}, "LastOffsetAddress");
   Value *LastOffset =
       Builder.CreateLoad(Type, LastOffsetAddr, "LastOffset");
+
+  // Calculate the new stride
   Value *Stride = Builder.CreateSub(VPGep->getOffset(), LastOffset, "Stride");
+
+  // Store the current offset
+  Builder.CreateStore(VPGep->getOffset(), LastOffsetAddr);
 
   std::cout << "Lowered VPGep Instance " << std::endl;
 
