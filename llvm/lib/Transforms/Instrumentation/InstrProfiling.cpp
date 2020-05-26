@@ -568,11 +568,15 @@ bool InstrProfiling::run(
   for (Function &F : M) {
     InstrProfIncrementInst *FirstProfIncInst = nullptr;
     for (BasicBlock &BB : F)
-      for (auto I = BB.begin(), E = BB.end(); I != E; I++)
-        if (auto *Ind = dyn_cast<InstrProfValueProfileInst>(I))
+      for (auto I = BB.begin(), E = BB.end(); I != E; I++) {
+        if (auto *Ind = dyn_cast<InstrProfValueProfileInst>(I)) {
           computeNumValueSiteCounts(Ind);
-        else if (FirstProfIncInst == nullptr)
+        } else if (auto *Gep = dyn_cast<InstrVPGepInst>(I)) {
+          computeNumValueSiteCountsGep(Gep);
+        } else if (FirstProfIncInst == nullptr) {
           FirstProfIncInst = dyn_cast<InstrProfIncrementInst>(I);
+        }
+      }
 
     // Value profiling intrinsic lowering requires per-function profile data
     // variable to be created first.
@@ -629,6 +633,21 @@ getOrInsertValueProfilingCall(Module &M, const TargetLibraryInfo &TLI,
         FunctionType::get(ReturnTy, makeArrayRef(RangeParamTypes), false);
     return M.getOrInsertFunction(getInstrProfValueRangeProfFuncName(),
                                  ValueRangeProfilingCallTy, AL);
+  }
+}
+
+
+void InstrProfiling::computeNumValueSiteCountsGep(InstrVPGepInst* Gep) {
+  GlobalVariable *Name = Gep->getName();
+  uint64_t ValueKind = IPVK_GepOffset;
+  uint64_t Size = Gep->getNumCounters()->getZExtValue();
+  auto It = ProfileDataMap.find(Name);
+  if (It == ProfileDataMap.end()) {
+    PerFunctionProfileData PD;
+    PD.NumValueSites[ValueKind] = Size;
+    ProfileDataMap[Name] = PD;
+  } else {
+    It->second.NumValueSites[ValueKind] = Size;
   }
 }
 

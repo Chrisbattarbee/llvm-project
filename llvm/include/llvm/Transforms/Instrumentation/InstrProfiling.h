@@ -132,6 +132,7 @@ private:
   /// Get the counters used to store the last GEP instruction offset, creating
   /// them if necessary.
   GlobalVariable* getOrCreateGepLastOffsetCounters(InstrVPGepInst *VpGep);
+  void computeNumValueSiteCountsGep(InstrVPGepInst *Gep);
 };
 
 } // end namespace llvm
