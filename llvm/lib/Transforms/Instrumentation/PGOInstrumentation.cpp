@@ -930,6 +930,7 @@ static void instrumentOneFunc(
              Builder.getInt64(SiteIndex),
              Builder.getInt32(SiteIndex)
             });
+        SiteIndex++;
       } else {
 
         IRBuilder<> Builder(Cand.InsertPt);
