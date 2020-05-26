@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Instrumentation/InstrProfiling.h"
+#include "ValueProfileCollector.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -51,10 +52,12 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <string>
 #include <iostream>
+#include <llvm/Analysis/EHPersonalities.h>
+#include <string>
 
 using namespace llvm;
+using VPCandidateInfo = ValueProfileCollector::CandidateInfo;
 
 #define DEBUG_TYPE "instrprof"
 
@@ -717,6 +720,53 @@ InstrProfiling::getOrCreateGepLastOffsetCounters(InstrVPGepInst *VPGep) {
   return LastGepOffsetCounterPtr;
 }
 
+// Should return the GEP instruction immediately preceding the intrinsic
+// Null pointer if it can not be found
+static Instruction* findGep(InstrVPGepInst *VPGep) {
+  BasicBlock* ParentBB = VPGep->getParent();
+  auto InstrIterator = ParentBB->begin();
+  while (InstrIterator != ParentBB->end()) {
+    if (dyn_cast<InstrVPGepInst>(InstrIterator) == VPGep) {
+      if (auto* Gep = dyn_cast<GetElementPtrInst>(InstrIterator->getNextNode())) {
+        return Gep;
+      }
+    }
+    InstrIterator ++;
+  }
+  return nullptr;
+}
+
+// When generating value profiling calls on Windows routines that make use of
+// handler funclets for exception processing an operand bundle needs to attached
+// to the called function. This routine will set \p OpBundles to contain the
+// funclet information, if any is needed, that should be placed on the generated
+// value profiling call for the value profile candidate call.
+static void
+populateEHOperandBundle(VPCandidateInfo &Cand,
+                        DenseMap<BasicBlock *, ColorVector> &BlockColors,
+                        SmallVectorImpl<OperandBundleDef> &OpBundles) {
+  auto *OrigCall = dyn_cast<CallBase>(Cand.AnnotatedInst);
+  if (OrigCall && !isa<IntrinsicInst>(OrigCall)) {
+    // The instrumentation call should belong to the same funclet as a
+    // non-intrinsic call, so just copy the operand bundle, if any exists.
+    Optional<OperandBundleUse> ParentFunclet =
+        OrigCall->getOperandBundle(LLVMContext::OB_funclet);
+    if (ParentFunclet)
+      OpBundles.emplace_back(OperandBundleDef(*ParentFunclet));
+  } else {
+    // Intrinsics or other instructions do not get funclet information from the
+    // front-end. Need to use the BlockColors that was computed by the routine
+    // colorEHFunclets to determine whether a funclet is needed.
+    if (!BlockColors.empty()) {
+      const ColorVector &CV = BlockColors.find(OrigCall->getParent())->second;
+      assert(CV.size() == 1 && "non-unique color for block!");
+      Instruction *EHPad = CV.front()->getFirstNonPHI();
+      if (EHPad->isEHPad())
+        OpBundles.emplace_back("funclet", EHPad);
+    }
+  }
+}
+
 void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
   GlobalVariable *LastGepOffsetCounters =
       getOrCreateGepLastOffsetCounters(VPGep);
@@ -733,11 +783,34 @@ void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
       Builder.CreateLoad(Type, LastOffsetAddr, "LastOffset");
   Value *Stride = Builder.CreateSub(VPGep->getOffset(), LastOffset, "Stride");
 
-  // TODO INSERT VALUE PROFILING CALL HERE
-
-
-
   std::cout << "Lowered VPGep Instance " << std::endl;
+
+  // Create the VP candidate info
+  VPCandidateInfo CandidateInfo;
+  CandidateInfo.AnnotatedInst = findGep(VPGep);
+  CandidateInfo.InsertPt = VPGep;
+  CandidateInfo.V = Stride;
+
+  DenseMap<BasicBlock *, ColorVector> BlockColors;
+  SmallVector<OperandBundleDef, 1> OpBundles;
+  populateEHOperandBundle(CandidateInfo, BlockColors, OpBundles);
+
+  // TODO FIX HARD CODED CONSTANTS IN THIS CALL
+  CallInst* VPCall = Builder.CreateCall(
+      Intrinsic::getDeclaration(M, Intrinsic::instrprof_value_profile),
+      {
+          VPGep->getArgOperand(0),
+          VPGep->getArgOperand(1),
+          Stride,
+          Builder.getInt32(0),
+          VPGep->getArgOperand(5)},
+      OpBundles);
+
+  auto* InstrProfVal = dyn_cast<InstrProfValueProfileInst>(VPCall);
+
+  lowerValueProfileInst(InstrProfVal);
+
+  std::cout << "Lowered Value Profiling of Stride Instance " << std::endl;
   VPGep->eraseFromParent();
 }
 

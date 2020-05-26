@@ -506,7 +506,7 @@ def int_instrprof_value_profile : Intrinsic<[],
 def int_vp_gep : Intrinsic<[],
                                         [llvm_ptr_ty, llvm_i64_ty,
                                          llvm_i64_ty, llvm_i64_ty,
-                                         llvm_i64_ty],
+                                         llvm_i64_ty, llvm_i32_ty],
                                         []>;
 
 //===------------------- Standard C Library Intrinsics --------------------===//
