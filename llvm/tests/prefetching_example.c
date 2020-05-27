@@ -1,3 +1,4 @@
+/*
 int sum() {
   // for each range
   for (int x = range_start; x < range_end; x ++) {
@@ -19,6 +20,7 @@ func(x) {
     load arr + x
   }
 }
+ */
 
 // How to determine a range?
 // What is a good cut of point for sum of ranges
