@@ -18,6 +18,7 @@
 #include <sys/types.h>
 
 #include <iostream>
+#include <llvm/ProfileData/InstrProf.h>
 #include <llvm/Support/Debug.h>
 
 #ifdef NO_STRIDES
@@ -489,6 +490,30 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
     return found;
   }
 
+  bool shouldPrefetch(GetElementPtrInst *Gep) {
+    uint32_t ActualNumValueData;
+    uint64_t TotalC;
+    InstrProfValueData ValueDataArray[INSTR_PROF_MAX_NUM_VAL_PER_SITE];
+    Instruction* Inst = dyn_cast<Instruction>(Gep);
+    bool Res =
+        getValueProfDataFromInst(*Inst, IPVK_GepOffset, INSTR_PROF_MAX_NUM_VAL_PER_SITE,
+                                 ValueDataArray, ActualNumValueData, TotalC);
+
+    if (!Res) {
+      // No profiling information so we just return true
+      return true;
+    }
+
+    // Really basic analysis, todo make this better
+    bool GreaterThan50PercentIsOneStride = false;
+    for (uint32_t x = 0; x < ActualNumValueData; x ++) {
+      if (ValueDataArray[x].Count > TotalC / 2) {
+        GreaterThan50PercentIsOneStride = true;
+      }
+    }
+    return !GreaterThan50PercentIsOneStride;
+  }
+
   bool runOnFunction(Function &F) override {
     LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
 
@@ -548,6 +573,28 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
     }
 
     for (uint64_t x = 0; x < Loads.size(); x++) {
+      LoadInst* CurrentLoad = dyn_cast<LoadInst>(Loads[x]);
+      assert(CurrentLoad); // The load instruction is not a load and we appear to have fucked it
+
+      // Do analysis of GEPs value profiles to see if it is worth continuing ahead
+      bool AnalysisImpliesWeShouldIgnoreCandidate = false;
+      for (uint64_t y = 0; y < Insts[x].size(); y ++) {
+        Instruction* instr = Insts[x][y];
+        if (CurrentLoad->getOperand(0) == instr) {
+          // We have found the instruction that is the operand to the load
+          if (GetElementPtrInst* Gep = dyn_cast<GetElementPtrInst>(instr)) {
+            // The instruction used to load is a Gep and we should have some
+            // profile data for it
+            AnalysisImpliesWeShouldIgnoreCandidate = !shouldPrefetch(Gep);
+          }
+        }
+      }
+
+      if (AnalysisImpliesWeShouldIgnoreCandidate) {
+        dbgs() << "Ignoring "<< *(Loads[x]) << " due to GEP analysis\n";
+        continue;
+      }
+
       ValueMap<Instruction *, Value *> Transforms;
 
       bool ignore = true;
