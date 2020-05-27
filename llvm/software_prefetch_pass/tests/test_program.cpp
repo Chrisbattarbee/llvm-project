@@ -1,10 +1,13 @@
 #include "stdint.h"
 #include "stdlib.h"
+#include <time.h>
 
-#define ARRAY_SIZE 10
+#define ARRAY_SIZE 1000
 int main() {
     uint32_t* array = (uint32_t*) malloc(sizeof(uint32_t) * ARRAY_SIZE);
     uint32_t* index_array = (uint32_t*) malloc(sizeof(uint32_t) * ARRAY_SIZE);
+
+  srand(time(NULL));
 
     for (volatile int x = 0; x < ARRAY_SIZE; x ++) {
         array[x] = rand();

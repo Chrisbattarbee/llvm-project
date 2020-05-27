@@ -95,7 +95,7 @@ cl::opt<bool>
 cl::opt<bool> ValueProfileStaticAlloc(
     "vp-static-alloc",
     cl::desc("Do static counter allocation for value profiler"),
-    cl::init(true));
+    cl::init(false));
 
 cl::opt<double> NumCountersPerValueSite(
     "vp-counters-per-site",
