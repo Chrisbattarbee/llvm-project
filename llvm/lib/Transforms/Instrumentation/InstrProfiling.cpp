@@ -803,7 +803,7 @@ void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
 
   // Calculate the new stride
   Value *Stride = Builder.CreateSub(VPGep->getOffset(), LastOffset, "Stride");
-  Value *StrideExtended = Builder.CreateZExtOrTrunc(Stride, Builder.getInt64Ty());
+//  Value *StrideExtended = Builder.CreateZExtOrTrunc(Stride, Builder.getInt64Ty());
 
   // Store the current offset
   Builder.CreateStore(VPGep->getOffset(), LastOffsetAddr);
@@ -814,7 +814,7 @@ void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
   VPCandidateInfo CandidateInfo;
   CandidateInfo.AnnotatedInst = findGep(VPGep);
   CandidateInfo.InsertPt = VPGep;
-  CandidateInfo.V = StrideExtended;
+  CandidateInfo.V = Stride;
 
   DenseMap<BasicBlock *, ColorVector> BlockColors;
   SmallVector<OperandBundleDef, 1> OpBundles;
@@ -827,7 +827,7 @@ void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
       {
           VPGep->getArgOperand(0),
           VPGep->getArgOperand(1),
-          StrideExtended,
+          Stride,
           Builder.getInt32(IPVK_GepOffset),
           VPGep->getArgOperand(5)},
       OpBundles);
