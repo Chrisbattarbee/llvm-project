@@ -12,6 +12,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Scalar.h"
 #include <sys/types.h>
@@ -161,7 +162,7 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
     for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
       PHINode *PN = cast<PHINode>(I);
       if (Instruction *Inc =
-          dyn_cast<Instruction>(PN->getIncomingValueForBlock(Backedge)))
+              dyn_cast<Instruction>(PN->getIncomingValueForBlock(Backedge)))
         if (Inc->getOpcode() == Instruction::Add && Inc->getOperand(0) == PN)
           if (dyn_cast<ConstantInt>(Inc->getOperand(1)))
             return PN;
@@ -193,10 +194,10 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
     for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
       PHINode *PN = cast<PHINode>(I);
       if (GetElementPtrInst *Inc = dyn_cast<GetElementPtrInst>(
-          PN->getIncomingValueForBlock(Backedge)))
+              PN->getIncomingValueForBlock(Backedge)))
         if (Inc->getOperand(0) == PN)
           if (ConstantInt *CI = dyn_cast<ConstantInt>(
-              Inc->getOperand(Inc->getNumOperands() - 1)))
+                  Inc->getOperand(Inc->getNumOperands() - 1)))
             if (CI->equalsInt(1))
               return PN;
     }
@@ -227,10 +228,10 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
     for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
       PHINode *PN = cast<PHINode>(I);
       if (GetElementPtrInst *Inc = dyn_cast<GetElementPtrInst>(
-          PN->getIncomingValueForBlock(Backedge)))
+              PN->getIncomingValueForBlock(Backedge)))
         if (Inc->getOperand(0) == PN)
           if (ConstantInt *CI = dyn_cast<ConstantInt>(
-              Inc->getOperand(Inc->getNumOperands() - 1)))
+                  Inc->getOperand(Inc->getNumOperands() - 1)))
             if (CI->equalsInt(1))
               return Inc;
     }
@@ -261,10 +262,10 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
     for (BasicBlock::iterator I = H->begin(); isa<PHINode>(I); ++I) {
       PHINode *PN = cast<PHINode>(I);
       if (GetElementPtrInst *Inc = dyn_cast<GetElementPtrInst>(
-          PN->getIncomingValueForBlock(Backedge)))
+              PN->getIncomingValueForBlock(Backedge)))
         if (Inc->getOperand(0) == PN)
           if (ConstantInt *CI = dyn_cast<ConstantInt>(
-              Inc->getOperand(Inc->getNumOperands() - 1)))
+                  Inc->getOperand(Inc->getNumOperands() - 1)))
             if (CI->equalsInt(1))
               return PN->getIncomingValueForBlock(Incoming);
     }
@@ -385,7 +386,7 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
                 // do nothing
                 dbgs() << "not switching phis\n";
               } else if (LI.getLoopFor(phi->getParent())
-                  ->isLoopInvariant(Phi)) {
+                             ->isLoopInvariant(Phi)) {
                 dbgs() << "switching phis\n";
                 roundInsts.clear();
                 for (auto q : Insts[lindex]) {
@@ -455,7 +456,7 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
                   // do nothing
                   dbgs() << "not switching phis\n";
                 } else if (LI.getLoopFor(phi->getParent())
-                    ->isLoopInvariant(Phi)) {
+                               ->isLoopInvariant(Phi)) {
                   dbgs() << "switching phis\n";
                   roundInsts.clear();
                   for (auto q : Instrz) {
@@ -517,8 +518,8 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
 
               if (loads < 2) {
                 dbgs() << "stride\n"; // don't remove the stride cases yet
-                // though. Only remove them once we know
-                // it's not in a sequence with an indirect.
+                                      // though. Only remove them once we know
+                                      // it's not in a sequence with an indirect.
 #ifdef NO_STRIDES
                 // add a continue in here to avoid generating strided
                 // prefetches. Make sure to reduce the value of C accordingly!
@@ -611,10 +612,10 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
           if (z == getCanonicalishInductionVariable(L))
             n = dyn_cast<Instruction>(Builder.CreateAdd(
                 Phis[x], Phis[x]->getType()->isIntegerTy(64)
-                         ? ConstantInt::get(
-                        Type::getInt64Ty(M->getContext()), offset)
-                         : ConstantInt::get(
-                        Type::getInt32Ty(M->getContext()), offset)));
+                             ? ConstantInt::get(
+                                   Type::getInt64Ty(M->getContext()), offset)
+                             : ConstantInt::get(
+                                   Type::getInt32Ty(M->getContext()), offset)));
           else if (z == getWeirdCanonicalishInductionVariable(L)) {
             // This covers code where a pointer is incremented, instead of a
             // canonical induction variable.
@@ -628,7 +629,7 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
 
             bool changed = true;
             while (LI.getLoopFor(Phis[x]->getParent()) !=
-                   LI.getLoopFor(n->getParent()) &&
+                       LI.getLoopFor(n->getParent()) &&
                    changed) {
 
               Loop *ol = LI.getLoopFor(n->getParent());
@@ -703,7 +704,7 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
 
           bool changed = true;
           while (LI.getLoopFor(Phis[x]->getParent()) !=
-                 LI.getLoopFor(mod->getParent()) &&
+                     LI.getLoopFor(mod->getParent()) &&
                  changed) {
             Loop *ol = LI.getLoopFor(mod->getParent());
             makeLoopInvariantSpec(mod, changed,
@@ -716,11 +717,6 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
           modified = true;
         } else if (z == Loads[x]) {
 
-          Function *fun =
-              Intrinsic::getDeclaration(F.getParent(), Intrinsic::prefetch);
-
-          assert(fun);
-
           Instruction *oldGep = dyn_cast<Instruction>(Loads[x]->getOperand(0));
           assert(oldGep);
 
@@ -731,9 +727,14 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
           Instruction *cast = dyn_cast<Instruction>(
               Builder.CreateBitCast(gep, Type::getInt8PtrTy(M->getContext())));
 
+          Function *fun =
+              Intrinsic::getDeclaration(F.getParent(), Intrinsic::prefetch, cast->getType());
+
+          assert(fun);
+
           bool changed = true;
           while (LI.getLoopFor(Phis[x]->getParent()) !=
-                 LI.getLoopFor(cast->getParent()) &&
+                     LI.getLoopFor(cast->getParent()) &&
                  changed) {
             Loop *ol = LI.getLoopFor(cast->getParent());
             makeLoopInvariantSpec(cast, changed, ol);
@@ -775,7 +776,7 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
 
           bool changed = true;
           while (changed && LI.getLoopFor(Phis[x]->getParent()) !=
-                            LI.getLoopFor(n->getParent())) {
+                                LI.getLoopFor(n->getParent())) {
             changed = false;
 
             makeLoopInvariantSpec(n, changed, LI.getLoopFor(n->getParent()));
@@ -796,6 +797,8 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
 };
 
 char SwPrefetchPass::ID;
+
+/*
 /// This function is called by the PassManagerBuilder to add the pass to the
 /// pass manager.  You can query the builder for the optimisation level and so
 /// on to decide whether to insert the pass.
@@ -813,4 +816,10 @@ void addSwPrefetchPass(const PassManagerBuilder &Builder,
 /// `PassManagerBuilder` documentation for other extension points.
 RegisterStandardPasses S(PassManagerBuilder::EP_VectorizerStart,
                          addSwPrefetchPass);
+                         */
 } // namespace
+
+FunctionPass *
+llvm::createSwPrefetchPass() {
+  return new SwPrefetchPass();
+}

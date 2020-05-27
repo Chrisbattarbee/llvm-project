@@ -2,7 +2,7 @@
 #include "stdlib.h"
 #include <time.h>
 
-#define ARRAY_SIZE 1000
+#define ARRAY_SIZE 100000000
 int main() {
     uint32_t* array = (uint32_t*) malloc(sizeof(uint32_t) * ARRAY_SIZE);
     uint32_t* index_array = (uint32_t*) malloc(sizeof(uint32_t) * ARRAY_SIZE);
@@ -15,7 +15,7 @@ int main() {
     }
 
     uint64_t sum = 0;
-    for (volatile int x = 0; x < ARRAY_SIZE; x ++) {
+    for (int x = 0; x < ARRAY_SIZE; x ++) {
         sum += array[index_array[x]];
     }
     return sum;

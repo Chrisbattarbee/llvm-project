@@ -48,6 +48,7 @@
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "llvm/Transforms/Vectorize/SLPVectorizer.h"
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
+#include <iostream>
 
 using namespace llvm;
 
@@ -716,6 +717,17 @@ void PassManagerBuilder::populateModulePassManager(
     // analysis to establish no-aliasing between loads and stores of different
     // columns of the same matrix.
     MPM.add(createEarlyCSEPass(false));
+  }
+
+  // Sofware Prefetching passes
+  auto RunSoftwarePrefetchingIndirectLoops = std::getenv("LLVM_RUN_SOFTWARE_PREFETCHER");
+  if (RunSoftwarePrefetchingIndirectLoops) {
+    std::cout << "Running software prefetching passs" << std::endl;
+    MPM.add(createLoopRerollPass());
+    MPM.add(createSwPrefetchPass());
+    MPM.add(createVerifierPass());
+  } else {
+    std::cout << "Not running software prefetching passs" << std::endl;
   }
 
   addExtensionsToPM(EP_VectorizerStart, MPM);
