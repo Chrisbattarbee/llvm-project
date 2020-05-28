@@ -790,6 +790,17 @@ void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
   GlobalVariable *LastGepOffsetCounters =
       getOrCreateGepLastOffsetCounters(VPGep);
 
+  // Create the VP candidate info
+  VPCandidateInfo CandidateInfo;
+  CandidateInfo.AnnotatedInst = findGep(VPGep);
+  CandidateInfo.InsertPt = VPGep;
+
+  if (!CandidateInfo.AnnotatedInst) {
+    dbgs() << "Could not find Gep for " << *VPGep << ". The GEP was probably optimised out. Removing intrinsic without lowering to VP calls.\n";
+    VPGep->eraseFromParent();
+    return;
+  }
+
   IRBuilder<> Builder(VPGep);
 
   IntegerType *Type = VPGep->getSelfIndex()->getType();
@@ -805,16 +816,13 @@ void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
   Value *Stride = Builder.CreateSub(VPGep->getOffset(), LastOffset, "Stride");
 //  Value *StrideExtended = Builder.CreateZExtOrTrunc(Stride, Builder.getInt64Ty());
 
+
+  CandidateInfo.V = Stride;
+
   // Store the current offset
   Builder.CreateStore(VPGep->getOffset(), LastOffsetAddr);
 
   std::cout << "Lowered VPGep Instance " << std::endl;
-
-  // Create the VP candidate info
-  VPCandidateInfo CandidateInfo;
-  CandidateInfo.AnnotatedInst = findGep(VPGep);
-  CandidateInfo.InsertPt = VPGep;
-  CandidateInfo.V = Stride;
 
   DenseMap<BasicBlock *, ColorVector> BlockColors;
   SmallVector<OperandBundleDef, 1> OpBundles;
