@@ -1016,6 +1016,8 @@ bool getValueProfDataFromInst(const Instruction &Inst,
     ConstantInt *Value = mdconst::dyn_extract<ConstantInt>(MD->getOperand(I));
     ConstantInt *Count =
         mdconst::dyn_extract<ConstantInt>(MD->getOperand(I + 1));
+
+//    dbgs() << "Value and count " << Value << " " << Count << "\n";
     if (!Value || !Count)
       return false;
     ValueData[ActualNumValueData].Value = Value->getZExtValue();

@@ -176,7 +176,7 @@ static cl::opt<bool> DisableValueProfiling("disable-vp", cl::init(false),
 // Command line option to set the maximum number of VP annotations to write to
 // the metadata for a single indirect call callsite.
 static cl::opt<unsigned> MaxNumAnnotations(
-    "icp-max-annotations", cl::init(3), cl::Hidden, cl::ZeroOrMore,
+    "icp-max-annotations", cl::init(INSTR_PROF_MAX_NUM_VAL_PER_SITE), cl::Hidden, cl::ZeroOrMore,
     cl::desc("Max number of annotations for a single indirect "
              "call callsite"));
 

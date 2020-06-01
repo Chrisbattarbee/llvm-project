@@ -490,38 +490,62 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
     return found;
   }
 
-  bool shouldPrefetch(LoadInst *Load, std::vector<SmallVector<Instruction*, 8>>& SubloadsVec) {
+  bool shouldPrefetch(SmallVector<Instruction *, 4> Loads, LoadInst *Load, std::vector<SmallVector<Instruction*, 8>>& SubloadsVec, std::vector<LoadInst*>&  WouldRemove, std::map<LoadInst*, SmallVector<LoadInst*, 8>>&  Parents) {
     uint32_t ActualNumValueData;
     uint64_t TotalC;
     InstrProfValueData ValueDataArray[INSTR_PROF_MAX_NUM_VAL_PER_SITE];
-    Instruction* Inst = dyn_cast<Instruction>(Load);
-    bool Res =
-        getValueProfDataFromInst(*Inst, IPVK_GepOffset, INSTR_PROF_MAX_NUM_VAL_PER_SITE,
-                                 ValueDataArray, ActualNumValueData, TotalC);
+    Instruction *Inst = dyn_cast<Instruction>(Load);
+    bool Res = getValueProfDataFromInst(
+        *Inst, IPVK_GepOffset, INSTR_PROF_MAX_NUM_VAL_PER_SITE, ValueDataArray,
+        ActualNumValueData, TotalC);
+
+    // Calculate our own totalC because we dont record all data
+    TotalC = 0;
+    for (int x = 0; x < ActualNumValueData; x ++) {
+      TotalC += ValueDataArray[x].Count;
+    }
 
     if (!Res) {
       // No profiling information so we just return true
       return true;
     }
 
-    // If we are a subload of another sequence, don't remove
-    for (auto subloads: SubloadsVec) {
-      for (auto currentLoad: subloads) {
-        if (currentLoad == Load)  {
-          dbgs() << "We are a subload, allowing prefetching\n";
-          return true;
+    // If we are a subload of another sequence, don't remove for now
+    for (int x = 0; x < SubloadsVec.size(); x ++) {
+      auto subloads = SubloadsVec[x];
+      for (auto currentLoad : subloads) {
+        if (currentLoad == Load) {
+          dbgs() << *Load << " is a subload of " << *Loads[x] << "\n";
+          Parents[Load].push_back(dyn_cast<LoadInst>(Loads[x]));
         }
       }
     }
 
+    // Don't prefetch if 90% of loads fall within trigger distance
+    int64_t TriggerDistance = 4096;
+    float CutoffPoint = 0.1;
+
+//    dbgs() << "ActualNumValueData: " << ActualNumValueData << "\n";
     // Really basic analysis, todo make this better
-    bool GreaterThan50PercentIsOneStride = false;
-    for (uint32_t x = 0; x < ActualNumValueData; x ++) {
-      if (ValueDataArray[x].Count > TotalC / 2) {
-        GreaterThan50PercentIsOneStride = true;
+    uint64_t total_num_offsets_outside_trigger_distance = 0;
+    for (uint32_t x = 0; x < ActualNumValueData; x++) {
+      int64_t value = (int64_t) ValueDataArray[x].Value; // Convert from unsigned integer representation
+//      dbgs() << "Value: " << value << "\n";
+      if (value > TriggerDistance || value < -TriggerDistance) {
+        total_num_offsets_outside_trigger_distance += ValueDataArray[x].Count;
       }
     }
-    return !GreaterThan50PercentIsOneStride;
+//    dbgs() << "Total num offsets outside trigger distance " <<  total_num_offsets_outside_trigger_distance << "\n";
+//    dbgs() << "Cut off point " <<  (((float)TotalC) * CutoffPoint) << "\n";
+    if (((float)total_num_offsets_outside_trigger_distance) >
+        (((float)TotalC) * CutoffPoint)) {
+      dbgs() << "Will not remove " << *Load << "\n";
+      return true;
+    } else {
+      dbgs() << "Would remove " << *Load << "\n";
+      WouldRemove.push_back(Load);
+      return false;
+    }
   }
 
   bool runOnFunction(Function &F) override {
@@ -587,15 +611,45 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
         }
       }
     }
+    std::vector<LoadInst*>  WouldRemove;
+    std::vector<LoadInst*>  WillRemove;
+    std::map<LoadInst*, SmallVector<LoadInst*, 8>>  Parents;
+    for (uint64_t x = 0; x < Loads.size(); x++) {
+      LoadInst* CurrentLoad = dyn_cast<LoadInst>(Loads[x]);
+      Parents[CurrentLoad] = SmallVector<LoadInst*, 8>();
+    }
 
     for (uint64_t x = 0; x < Loads.size(); x++) {
       LoadInst* CurrentLoad = dyn_cast<LoadInst>(Loads[x]);
-      assert(CurrentLoad); // The load instruction is not a load and we appear to have fucked it
+      // Remove all loads that dont pass our stride analysis
+      shouldPrefetch(Loads, CurrentLoad, SubloadsVec, WouldRemove, Parents);
+    }
 
-      if (!shouldPrefetch(CurrentLoad, SubloadsVec)) {
+    for (uint64_t x = 0; x < Loads.size(); x++) {
+      LoadInst *CurrentLoad = dyn_cast<LoadInst>(Loads[x]);
+
+      if (std::count(WouldRemove.begin(), WouldRemove.end(), CurrentLoad)) {
+        bool shouldRemove = true;
+        for (auto ParentLoad : Parents[CurrentLoad]) {
+          if (std::count(WouldRemove.begin(), WouldRemove.end(), ParentLoad) ==
+              0) {
+            shouldRemove = false;
+          }
+        }
+        if (shouldRemove) {
+          WillRemove.push_back(CurrentLoad);
+        }
+      }
+    }
+
+    for (uint64_t x = 0; x < Loads.size(); x++) {
+      LoadInst *CurrentLoad = dyn_cast<LoadInst>(Loads[x]);
+
+      if (std::count(WillRemove.begin(), WillRemove.end(), CurrentLoad) > 0) {
         dbgs() << "Ignoring "<< *(Loads[x]) << " due to Load Stride analysis\n";
         continue;
       }
+      dbgs() << "Prefetching "<< *(Loads[x]) << ", it passed Stride analysis\n";
 
       ValueMap<Instruction *, Value *> Transforms;
 
