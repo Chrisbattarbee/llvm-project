@@ -1017,6 +1017,7 @@ bool getValueProfDataFromInst(const Instruction &Inst,
     ConstantInt *Count =
         mdconst::dyn_extract<ConstantInt>(MD->getOperand(I + 1));
 
+
 //    dbgs() << "Value and count " << Value << " " << Count << "\n";
     if (!Value || !Count)
       return false;

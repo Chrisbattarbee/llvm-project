@@ -499,15 +499,16 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
         *Inst, IPVK_GepOffset, INSTR_PROF_MAX_NUM_VAL_PER_SITE, ValueDataArray,
         ActualNumValueData, TotalC);
 
+    if (!Res) {
+      // No profiling information so we just return true
+      dbgs() << "Can not do analysis, no profiling information for " << *Inst << ".\n";
+      return true;
+    }
+
     // Calculate our own totalC because we dont record all data
     TotalC = 0;
     for (int x = 0; x < ActualNumValueData; x ++) {
       TotalC += ValueDataArray[x].Count;
-    }
-
-    if (!Res) {
-      // No profiling information so we just return true
-      return true;
     }
 
     // If we are a subload of another sequence, don't remove for now

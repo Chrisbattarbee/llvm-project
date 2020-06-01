@@ -868,6 +868,7 @@ void InstrProfiling::lowerValueProfileInst(InstrProfValueProfileInst *Ind) {
   CallInst *Call = nullptr;
   auto *TLI = &GetTLI(*Ind->getFunction());
 
+
   // To support value profiling calls within Windows exception handlers, funclet
   // information contained within operand bundles needs to be copied over to
   // the library call. This is required for the IR to be processed by the
