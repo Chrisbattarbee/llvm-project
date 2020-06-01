@@ -490,7 +490,7 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
     return found;
   }
 
-  bool shouldPrefetch(GetElementPtrInst *Gep) {
+  bool shouldPrefetch(LoadInst *Gep) {
     uint32_t ActualNumValueData;
     uint64_t TotalC;
     InstrProfValueData ValueDataArray[INSTR_PROF_MAX_NUM_VAL_PER_SITE];
@@ -576,22 +576,8 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
       LoadInst* CurrentLoad = dyn_cast<LoadInst>(Loads[x]);
       assert(CurrentLoad); // The load instruction is not a load and we appear to have fucked it
 
-      // Do analysis of GEPs value profiles to see if it is worth continuing ahead
-      bool AnalysisImpliesWeShouldIgnoreCandidate = false;
-      for (uint64_t y = 0; y < Insts[x].size(); y ++) {
-        Instruction* instr = Insts[x][y];
-        if (CurrentLoad->getOperand(0) == instr) {
-          // We have found the instruction that is the operand to the load
-          if (GetElementPtrInst* Gep = dyn_cast<GetElementPtrInst>(instr)) {
-            // The instruction used to load is a Gep and we should have some
-            // profile data for it
-            AnalysisImpliesWeShouldIgnoreCandidate = !shouldPrefetch(Gep);
-          }
-        }
-      }
-
-      if (AnalysisImpliesWeShouldIgnoreCandidate) {
-        dbgs() << "Ignoring "<< *(Loads[x]) << " due to GEP analysis\n";
+      if (!shouldPrefetch(CurrentLoad)) {
+        dbgs() << "Ignoring "<< *(Loads[x]) << " due to Load Stride analysis\n";
         continue;
       }
 
