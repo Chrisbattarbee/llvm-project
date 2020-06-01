@@ -490,11 +490,11 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
     return found;
   }
 
-  bool shouldPrefetch(LoadInst *Gep) {
+  bool shouldPrefetch(LoadInst *Load, std::vector<SmallVector<Instruction*, 8>>& SubloadsVec) {
     uint32_t ActualNumValueData;
     uint64_t TotalC;
     InstrProfValueData ValueDataArray[INSTR_PROF_MAX_NUM_VAL_PER_SITE];
-    Instruction* Inst = dyn_cast<Instruction>(Gep);
+    Instruction* Inst = dyn_cast<Instruction>(Load);
     bool Res =
         getValueProfDataFromInst(*Inst, IPVK_GepOffset, INSTR_PROF_MAX_NUM_VAL_PER_SITE,
                                  ValueDataArray, ActualNumValueData, TotalC);
@@ -502,6 +502,16 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
     if (!Res) {
       // No profiling information so we just return true
       return true;
+    }
+
+    // If we are a subload of another sequence, don't remove
+    for (auto subloads: SubloadsVec) {
+      for (auto currentLoad: subloads) {
+        if (currentLoad == Load)  {
+          dbgs() << "We are a subload, allowing prefetching\n";
+          return true;
+        }
+      }
     }
 
     // Really basic analysis, todo make this better
@@ -524,6 +534,7 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
     SmallVector<int, 4> Offsets;
     SmallVector<int, 4> MaxOffsets;
     std::vector<SmallVector<Instruction *, 8>> Insts;
+    std::vector<SmallVector<Instruction*, 8>> SubloadsVec;
 
     for (auto &BB : F) {
       for (auto &I : BB) {
@@ -535,8 +546,12 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
             if (depthFirstSearch(i, LI, phi, Instrz, Loads, Phis, Insts)) {
 
               int loads = 0;
+              SmallVector<Instruction*, 8> Subloads;
               for (auto &z : Instrz) {
                 if (dyn_cast<LoadInst>(z)) {
+                  if (z != i) {
+                    Subloads.push_back(z);
+                  }
                   loads++;
                 }
               }
@@ -559,6 +574,7 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
               }
 
               Loads.push_back(i);
+              SubloadsVec.push_back(Subloads);
               Insts.push_back(Instrz);
               Phis.push_back(phi);
               Offsets.push_back(0);
@@ -576,7 +592,7 @@ struct SwPrefetchPass : FunctionPass, InstVisitor<SwPrefetchPass> {
       LoadInst* CurrentLoad = dyn_cast<LoadInst>(Loads[x]);
       assert(CurrentLoad); // The load instruction is not a load and we appear to have fucked it
 
-      if (!shouldPrefetch(CurrentLoad)) {
+      if (!shouldPrefetch(CurrentLoad, SubloadsVec)) {
         dbgs() << "Ignoring "<< *(Loads[x]) << " due to Load Stride analysis\n";
         continue;
       }
