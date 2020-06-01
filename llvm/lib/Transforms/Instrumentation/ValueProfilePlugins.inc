@@ -83,9 +83,9 @@ public:
     while(BB != F.end()) {
       auto I = BB->begin();
       while (I != BB->end()){
-        if (GetElementPtrInst* GepInst = dyn_cast<GetElementPtrInst>(I)) {
-          std::cout << "Found GEP instruction to instrument with VP" << std::endl;
-          Candidates.emplace_back(CandidateInfo{GepInst, GepInst, GepInst});
+        if (LoadInst* Load = dyn_cast<LoadInst>(I)) {
+          std::cout << "Found Load instruction to instrument with VP" << std::endl;
+          Candidates.emplace_back(CandidateInfo{Load, Load, Load});
         }
         I++;
       }

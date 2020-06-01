@@ -741,13 +741,13 @@ InstrProfiling::getOrCreateGepLastOffsetCounters(InstrVPGepInst *VPGep) {
 
 // Should return the GEP instruction immediately preceding the intrinsic
 // Null pointer if it can not be found
-static Instruction* findGep(InstrVPGepInst *VPGep) {
+static Instruction* findLoad(InstrVPGepInst *VPGep) {
   BasicBlock* ParentBB = VPGep->getParent();
   auto InstrIterator = ParentBB->begin();
   while (InstrIterator != ParentBB->end()) {
     if (dyn_cast<InstrVPGepInst>(InstrIterator) == VPGep) {
-      if (auto* Gep = dyn_cast<GetElementPtrInst>(InstrIterator->getNextNode())) {
-        return Gep;
+      if (auto* Load = dyn_cast<LoadInst>(InstrIterator->getNextNode())) {
+        return Load;
       }
     }
     InstrIterator ++;
@@ -792,11 +792,11 @@ void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
 
   // Create the VP candidate info
   VPCandidateInfo CandidateInfo;
-  CandidateInfo.AnnotatedInst = findGep(VPGep);
+  CandidateInfo.AnnotatedInst = findLoad(VPGep);
   CandidateInfo.InsertPt = VPGep;
 
   if (!CandidateInfo.AnnotatedInst) {
-    dbgs() << "Could not find Gep for " << *VPGep << ". The GEP was probably optimised out. Removing intrinsic without lowering to VP calls.\n";
+    dbgs() << "Could not find Load for " << *VPGep << ". The Load was probably optimised out. Removing intrinsic without lowering to VP calls.\n";
     VPGep->eraseFromParent();
     return;
   }
@@ -805,22 +805,24 @@ void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
 
   IntegerType *Type = VPGep->getSelfIndex()->getType();
 
+  dbgs() << VPGep->getOffset()->getType()->getIntegerBitWidth();
+
   // Get the last offset
-  Value *LastOffsetAddr = Builder.CreateInBoundsGEP(
+  Value *LastAddressAddr = Builder.CreateInBoundsGEP(
       LastGepOffsetCounters->getValueType(), LastGepOffsetCounters,
-      {ConstantInt::get(Type, 0), VPGep->getSelfIndex()}, "LastOffsetAddress");
-  Value *LastOffset =
-      Builder.CreateLoad(Type, LastOffsetAddr, "LastOffset");
+      {ConstantInt::get(Type, 0), VPGep->getSelfIndex()}, "LastAddressAddr");
+  Value *LastAddress =
+      Builder.CreateLoad(Type, LastAddressAddr, "LastAddress");
 
   // Calculate the new stride
-  Value *Stride = Builder.CreateSub(VPGep->getOffset(), LastOffset, "Stride");
+  Value *Stride = Builder.CreateSub(VPGep->getOffset(), LastAddress, "Stride");
 //  Value *StrideExtended = Builder.CreateZExtOrTrunc(Stride, Builder.getInt64Ty());
 
 
   CandidateInfo.V = Stride;
 
   // Store the current offset
-  Builder.CreateStore(VPGep->getOffset(), LastOffsetAddr);
+  Builder.CreateStore(VPGep->getOffset(), LastAddressAddr);
 
   std::cout << "Lowered VPGep Instance " << std::endl;
 

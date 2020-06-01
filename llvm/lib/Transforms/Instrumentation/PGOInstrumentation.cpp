@@ -919,13 +919,14 @@ static void instrumentOneFunc(
 
       // Deal with the special snowflake case because we are double intrinsic lowering
       if (Kind == IPVK_GepOffset) {
-        GetElementPtrInst* GepInst = dyn_cast<GetElementPtrInst>(Cand.AnnotatedInst);
-        Value* Offset = GepInst->idx_begin()->get();
-        IRBuilder<> Builder(GepInst);
+        LoadInst* Load = dyn_cast<LoadInst>(Cand.AnnotatedInst);
+        Value* Address = Load->getPointerOperand();
+        IRBuilder<> Builder(Load);
         Builder.CreateCall(
             Intrinsic::getDeclaration(M, Intrinsic::vp_gep),
             {ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
-             Builder.getInt64(FuncInfo.FunctionHash), Offset,
+             Builder.getInt64(FuncInfo.FunctionHash),
+             Builder.CreatePtrToInt(Address, Builder.getInt64Ty()),
              Builder.getInt64(FuncInfo.ValueSites[Kind].size()),
              Builder.getInt64(SiteIndex),
              Builder.getInt32(SiteIndex)

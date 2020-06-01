@@ -2,7 +2,7 @@
 #include "stdlib.h"
 #include <time.h>
 
-#define ARRAY_SIZE 1000
+#define ARRAY_SIZE 255
 int main() {
     uint32_t* array = (uint32_t*) malloc(sizeof(uint32_t) * ARRAY_SIZE);
     uint32_t* index_array = (uint32_t*) malloc(sizeof(uint32_t) * ARRAY_SIZE);
