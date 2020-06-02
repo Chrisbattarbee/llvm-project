@@ -152,6 +152,8 @@ ModulePass *createInstrProfilingLegacyPass(
 
 FunctionPass *createSwPrefetchPass();
 
+FunctionPass *createValuePrefetchingPass();
+
 ModulePass *createInstrOrderFilePass();
 
 // Insert DataFlowSanitizer (dynamic data flow analysis) instrumentation

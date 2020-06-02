@@ -722,12 +722,20 @@ void PassManagerBuilder::populateModulePassManager(
   // Sofware Prefetching passes
   auto RunSoftwarePrefetchingIndirectLoops = std::getenv("LLVM_RUN_SOFTWARE_PREFETCHER");
   if (RunSoftwarePrefetchingIndirectLoops) {
-    std::cout << "Running software prefetching passs" << std::endl;
+    std::cout << "Adding software prefetching pass" << std::endl;
     MPM.add(createLoopRerollPass());
     MPM.add(createSwPrefetchPass());
     MPM.add(createVerifierPass());
   } else {
-    std::cout << "Not running software prefetching passs" << std::endl;
+    std::cout << "Not adding software prefetching pass" << std::endl;
+  }
+
+  auto RunValueSoftwarePrefetching = std::getenv("LLVM_RUN_VALUE_SOFTWARE_PREFETCHER");
+  if (RunValueSoftwarePrefetching) {
+    std::cout << "Adding value software prefetching pass (dominant large stride, bimodal)" << std::endl;
+    MPM.add(createValuePrefetchingPass());
+  } else {
+    std::cout << "Not adding value software prefetching pass (dominant large stride, bimodal)" << std::endl;
   }
 
   addExtensionsToPM(EP_VectorizerStart, MPM);

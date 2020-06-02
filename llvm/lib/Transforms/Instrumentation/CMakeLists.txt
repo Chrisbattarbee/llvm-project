@@ -18,6 +18,7 @@ add_llvm_component_library(LLVMInstrumentation
   ThreadSanitizer.cpp
   HWAddressSanitizer.cpp
   SwPrefetchPass.cpp
+  ValuePrefetching.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Transforms
