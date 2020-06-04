@@ -789,10 +789,16 @@ static void traverseAllValueSites(const InstrProfRecord &Func, uint32_t VK,
 
     for (uint32_t V = 0; V < NV; V++) {
       OS << "\t[ " << format("%2u", I) << ", ";
-      if (Symtab == nullptr)
-        OS << format("%4" PRIu64, VD[V].Value);
-      else
+      if (Symtab == nullptr) {
+        if (VK == IPVK_GepOffset) {
+          OS << format("%4" PRIi64, VD[V].Value);
+        } else {
+          OS << format("%4" PRIu64, VD[V].Value);
+        }
+      }
+      else {
         OS << Symtab->getFuncName(VD[V].Value);
+      }
       OS << ", " << format("%10" PRId64, VD[V].Count) << " ] ("
          << format("%.2f%%", (VD[V].Count * 100.0 / SiteSum)) << ")\n";
     }
@@ -926,6 +932,13 @@ static int showInstrProfile(const std::string &Filename, bool ShowCounts,
         OS << "    Number of Memory Intrinsics Calls: " << NumMemOPCalls
            << "\n";
 
+
+      uint32_t NumGepOffsets = Func.getNumValueSites(IPVK_GepOffset);
+      if (NumGepOffsets > 0) {
+        OS << "    Number of GEP offset Calls: " << NumGepOffsets
+           << "\n";
+      }
+
       if (ShowCounts) {
         OS << "    Block counts: [";
         size_t Start = (IsIRInstr ? 0 : 1);
@@ -945,6 +958,11 @@ static int showInstrProfile(const std::string &Filename, bool ShowCounts,
       if (ShowMemOPSizes && NumMemOPCalls > 0) {
         OS << "    Memory Intrinsic Size Results:\n";
         traverseAllValueSites(Func, IPVK_MemOPSize, VPStats[IPVK_MemOPSize], OS,
+                              nullptr);
+      }
+      if (NumGepOffsets > 0) {
+        OS << "    Gep offset Results:\n";
+        traverseAllValueSites(Func, IPVK_GepOffset, VPStats[IPVK_GepOffset], OS,
                               nullptr);
       }
     }
@@ -990,6 +1008,11 @@ static int showInstrProfile(const std::string &Filename, bool ShowCounts,
   if (ShownFunctions && ShowMemOPSizes) {
     OS << "Statistics for memory intrinsic calls sizes profile:\n";
     showValueSitesStats(OS, IPVK_MemOPSize, VPStats[IPVK_MemOPSize]);
+  }
+
+  if (ShownFunctions) {
+    OS << "Statistics for gep offsets profile:\n";
+    showValueSitesStats(OS, IPVK_GepOffset, VPStats[IPVK_GepOffset]);
   }
 
   if (ShowDetailedSummary) {

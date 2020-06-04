@@ -115,6 +115,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <numeric>
 #include <string>
@@ -131,6 +132,7 @@ using VPCandidateInfo = ValueProfileCollector::CandidateInfo;
 STATISTIC(NumOfPGOInstrument, "Number of edges instrumented.");
 STATISTIC(NumOfPGOSelectInsts, "Number of select instruction instrumented.");
 STATISTIC(NumOfPGOMemIntrinsics, "Number of mem intrinsics instrumented.");
+STATISTIC(NumOfPGOGepOffsets, "Number of gep offsets instrumented.");
 STATISTIC(NumOfPGOEdge, "Number of edges.");
 STATISTIC(NumOfPGOBB, "Number of basic-blocks.");
 STATISTIC(NumOfPGOSplit, "Number of critical edge splits.");
@@ -174,7 +176,7 @@ static cl::opt<bool> DisableValueProfiling("disable-vp", cl::init(false),
 // Command line option to set the maximum number of VP annotations to write to
 // the metadata for a single indirect call callsite.
 static cl::opt<unsigned> MaxNumAnnotations(
-    "icp-max-annotations", cl::init(3), cl::Hidden, cl::ZeroOrMore,
+    "icp-max-annotations", cl::init(INSTR_PROF_MAX_NUM_VAL_PER_SITE), cl::Hidden, cl::ZeroOrMore,
     cl::desc("Max number of annotations for a single indirect "
              "call callsite"));
 
@@ -550,6 +552,10 @@ public:
   // InstrumentBBs.
   void getInstrumentBBs(std::vector<BasicBlock *> &InstrumentBBs);
 
+  // Store all BBs from the CFG in AllBBs
+  void getAllBBs(std::vector<BasicBlock *> &AllBBs);
+
+
   // Give an edge, find the BB that will be instrumented.
   // Return nullptr if there is no BB to be instrumented.
   BasicBlock *getInstrBB(Edge *E);
@@ -576,14 +582,17 @@ public:
     // This should be done before CFG hash computation.
     SIVisitor.countSelects(Func);
     ValueSites[IPVK_MemOPSize] = VPC.get(IPVK_MemOPSize);
+    ValueSites[IPVK_GepOffset] = VPC.get(IPVK_GepOffset);
     if (!IsCS) {
       NumOfPGOSelectInsts += SIVisitor.getNumOfSelectInsts();
       NumOfPGOMemIntrinsics += ValueSites[IPVK_MemOPSize].size();
+      NumOfPGOGepOffsets += ValueSites[IPVK_GepOffset].size();
       NumOfPGOBB += MST.BBInfos.size();
       ValueSites[IPVK_IndirectCallTarget] = VPC.get(IPVK_IndirectCallTarget);
     } else {
       NumOfCSPGOSelectInsts += SIVisitor.getNumOfSelectInsts();
       NumOfCSPGOMemIntrinsics += ValueSites[IPVK_MemOPSize].size();
+      NumOfPGOGepOffsets += ValueSites[IPVK_GepOffset].size();
       NumOfCSPGOBB += MST.BBInfos.size();
     }
 
@@ -832,6 +841,23 @@ populateEHOperandBundle(VPCandidateInfo &Cand,
   }
 }
 
+template <class Edge, class BBInfo>
+void FuncPGOInstrumentation<Edge, BBInfo>::getAllBBs(
+    std::vector<BasicBlock *> &InstrumentBBs) {
+  std::set<BasicBlock*> BBSet;
+  for (auto &E : MST.AllEdges) {
+    if (E->SrcBB) {
+      BBSet.insert(const_cast<BasicBlock*>(E->SrcBB));
+    }
+    if (E->DestBB) {
+      BBSet.insert(const_cast<BasicBlock*>(E->DestBB));
+    }
+  }
+  for (auto *BB: BBSet) {
+    InstrumentBBs.push_back(BB);
+  }
+}
+
 // Visit all edge and instrument the edges not in MST, and do value profiling.
 // Critical edges will be split.
 static void instrumentOneFunc(
@@ -891,25 +917,43 @@ static void instrumentOneFunc(
       LLVM_DEBUG(dbgs() << "Instrument one VP " << ValueProfKindDescr[Kind]
                         << " site: CallSite Index = " << SiteIndex << "\n");
 
-      IRBuilder<> Builder(Cand.InsertPt);
-      assert(Builder.GetInsertPoint() != Cand.InsertPt->getParent()->end() &&
-             "Cannot get the Instrumentation point");
+      // Deal with the special snowflake case because we are double intrinsic lowering
+      if (Kind == IPVK_GepOffset) {
+        LoadInst* Load = dyn_cast<LoadInst>(Cand.AnnotatedInst);
+        Value* Address = Load->getPointerOperand();
+        IRBuilder<> Builder(Load);
+        Builder.CreateCall(
+            Intrinsic::getDeclaration(M, Intrinsic::vp_gep),
+            {ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
+             Builder.getInt64(FuncInfo.FunctionHash),
+             Builder.CreatePtrToInt(Address, Builder.getInt64Ty()),
+             Builder.getInt64(FuncInfo.ValueSites[Kind].size()),
+             Builder.getInt64(SiteIndex),
+             Builder.getInt32(SiteIndex)
+            });
+        SiteIndex++;
+      } else {
 
-      Value *ToProfile = nullptr;
-      if (Cand.V->getType()->isIntegerTy())
-        ToProfile = Builder.CreateZExtOrTrunc(Cand.V, Builder.getInt64Ty());
-      else if (Cand.V->getType()->isPointerTy())
-        ToProfile = Builder.CreatePtrToInt(Cand.V, Builder.getInt64Ty());
-      assert(ToProfile && "value profiling Value is of unexpected type");
+        IRBuilder<> Builder(Cand.InsertPt);
+        assert(Builder.GetInsertPoint() != Cand.InsertPt->getParent()->end() &&
+               "Cannot get the Instrumentation point");
 
-      SmallVector<OperandBundleDef, 1> OpBundles;
-      populateEHOperandBundle(Cand, BlockColors, OpBundles);
-      Builder.CreateCall(
-          Intrinsic::getDeclaration(M, Intrinsic::instrprof_value_profile),
-          {ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
-           Builder.getInt64(FuncInfo.FunctionHash), ToProfile,
-           Builder.getInt32(Kind), Builder.getInt32(SiteIndex++)},
-          OpBundles);
+        Value *ToProfile = nullptr;
+        if (Cand.V->getType()->isIntegerTy())
+          ToProfile = Builder.CreateZExtOrTrunc(Cand.V, Builder.getInt64Ty());
+        else if (Cand.V->getType()->isPointerTy())
+          ToProfile = Builder.CreatePtrToInt(Cand.V, Builder.getInt64Ty());
+        assert(ToProfile && "value profiling Value is of unexpected type");
+
+        SmallVector<OperandBundleDef, 1> OpBundles;
+        populateEHOperandBundle(Cand, BlockColors, OpBundles);
+        Builder.CreateCall(
+            Intrinsic::getDeclaration(M, Intrinsic::instrprof_value_profile),
+            {ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
+             Builder.getInt64(FuncInfo.FunctionHash), ToProfile,
+             Builder.getInt32(Kind), Builder.getInt32(SiteIndex++)},
+            OpBundles);
+      }
     }
   } // IPVK_First <= Kind <= IPVK_Last
 }

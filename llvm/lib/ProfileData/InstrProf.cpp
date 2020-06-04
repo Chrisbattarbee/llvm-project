@@ -1016,6 +1016,9 @@ bool getValueProfDataFromInst(const Instruction &Inst,
     ConstantInt *Value = mdconst::dyn_extract<ConstantInt>(MD->getOperand(I));
     ConstantInt *Count =
         mdconst::dyn_extract<ConstantInt>(MD->getOperand(I + 1));
+
+
+//    dbgs() << "Value and count " << Value << " " << Count << "\n";
     if (!Value || !Count)
       return false;
     ValueData[ActualNumValueData].Value = Value->getZExtValue();
@@ -1253,6 +1256,9 @@ void OverlapStats::dump(raw_fd_ostream &OS) const {
       break;
     case IPVK_MemOPSize:
       strncpy(ProfileKindName, "MemOP", 19);
+      break;
+    case IPVK_GepOffset:
+      strncpy(ProfileKindName, "GetOffset", 19);
       break;
     default:
       snprintf(ProfileKindName, 19, "VP[%d]", I);

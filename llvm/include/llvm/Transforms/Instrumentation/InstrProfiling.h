@@ -50,6 +50,7 @@ private:
   struct PerFunctionProfileData {
     uint32_t NumValueSites[IPVK_Last + 1];
     GlobalVariable *RegionCounters = nullptr;
+    GlobalVariable *LastGepOffsetCounters = nullptr;
     GlobalVariable *DataVar = nullptr;
 
     PerFunctionProfileData() {
@@ -125,6 +126,13 @@ private:
   /// Create a static initializer for our data, on platforms that need it,
   /// and for any profile output file that was specified.
   void emitInitialization();
+
+  void lowerVPGepInst(InstrVPGepInst *VPGep);
+
+  /// Get the counters used to store the last GEP instruction offset, creating
+  /// them if necessary.
+  GlobalVariable* getOrCreateGepLastOffsetCounters(InstrVPGepInst *VpGep);
+  void computeNumValueSiteCountsGep(InstrVPGepInst *Gep);
 };
 
 } // end namespace llvm

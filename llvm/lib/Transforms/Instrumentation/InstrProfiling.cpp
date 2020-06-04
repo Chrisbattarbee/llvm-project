@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Instrumentation/InstrProfiling.h"
+#include "ValueProfileCollector.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -51,9 +52,12 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
+#include <llvm/Analysis/EHPersonalities.h>
 #include <string>
 
 using namespace llvm;
+using VPCandidateInfo = ValueProfileCollector::CandidateInfo;
 
 #define DEBUG_TYPE "instrprof"
 
@@ -83,15 +87,15 @@ cl::opt<bool> DoHashBasedCounterSplit(
     cl::desc("Rename counter variable of a comdat function based on cfg hash"),
     cl::init(true));
 
-cl::opt<bool> RuntimeCounterRelocation(
-    "runtime-counter-relocation",
-    cl::desc("Enable relocating counters at runtime."),
-    cl::init(false));
+cl::opt<bool>
+    RuntimeCounterRelocation("runtime-counter-relocation",
+                             cl::desc("Enable relocating counters at runtime."),
+                             cl::init(false));
 
 cl::opt<bool> ValueProfileStaticAlloc(
     "vp-static-alloc",
     cl::desc("Do static counter allocation for value profiler"),
-    cl::init(true));
+    cl::init(false));
 
 cl::opt<double> NumCountersPerValueSite(
     "vp-counters-per-site",
@@ -147,6 +151,23 @@ cl::opt<bool> SpeculativeCounterPromotionToLoop(
 cl::opt<bool> IterativeCounterPromotion(
     cl::ZeroOrMore, "iterative-counter-promotion", cl::init(true),
     cl::desc("Allow counter promotion across the whole loop nest."));
+
+/// Get the name of a profiling variable for a particular function.
+template <class InstructionInstance>
+static std::string getVarName(InstructionInstance *Instr, StringRef Prefix) {
+  StringRef NamePrefix = getInstrProfNameVarPrefix();
+  StringRef Name = Instr->getName()->getName().substr(NamePrefix.size());
+  Function *F = Instr->getParent()->getParent();
+  Module *M = F->getParent();
+  if (!DoHashBasedCounterSplit || !isIRPGOFlagSet(M) ||
+      !canRenameComdatFunc(*F))
+    return (Prefix + Name).str();
+  uint64_t FuncHash = Instr->getHash()->getZExtValue();
+  SmallVector<char, 24> HashPostfix;
+  if (Name.endswith((Twine(".") + Twine(FuncHash)).toStringRef(HashPostfix)))
+    return (Prefix + Name).str();
+  return (Prefix + Name + "." + Twine(FuncHash)).str();
+}
 
 class InstrProfilingLegacyPass : public ModulePass {
   InstrProfiling InstrProf;
@@ -325,8 +346,9 @@ private:
 
   // Check whether the loop satisfies the basic conditions needed to perform
   // Counter Promotions.
-  bool isPromotionPossible(Loop *LP,
-                           const SmallVectorImpl<BasicBlock *> &LoopExitBlocks) {
+  bool
+  isPromotionPossible(Loop *LP,
+                      const SmallVectorImpl<BasicBlock *> &LoopExitBlocks) {
     // We can't insert into a catchswitch.
     if (llvm::any_of(LoopExitBlocks, [](BasicBlock *Exit) {
           return isa<CatchSwitchInst>(Exit->getTerminator());
@@ -406,13 +428,13 @@ PreservedAnalyses InstrProfiling::run(Module &M, ModuleAnalysisManager &AM) {
 }
 
 char InstrProfilingLegacyPass::ID = 0;
-INITIALIZE_PASS_BEGIN(
-    InstrProfilingLegacyPass, "instrprof",
-    "Frontend instrumentation-based coverage lowering.", false, false)
+INITIALIZE_PASS_BEGIN(InstrProfilingLegacyPass, "instrprof",
+                      "Frontend instrumentation-based coverage lowering.",
+                      false, false)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
-INITIALIZE_PASS_END(
-    InstrProfilingLegacyPass, "instrprof",
-    "Frontend instrumentation-based coverage lowering.", false, false)
+INITIALIZE_PASS_END(InstrProfilingLegacyPass, "instrprof",
+                    "Frontend instrumentation-based coverage lowering.", false,
+                    false)
 
 ModulePass *
 llvm::createInstrProfilingLegacyPass(const InstrProfOptions &Options,
@@ -440,6 +462,8 @@ bool InstrProfiling::lowerIntrinsics(Function *F) {
       } else if (auto *Ind = dyn_cast<InstrProfValueProfileInst>(Instr)) {
         lowerValueProfileInst(Ind);
         MadeChange = true;
+      } else if (auto *Gep = dyn_cast<InstrVPGepInst>(Instr)) {
+        lowerVPGepInst(Gep);
       }
     }
   }
@@ -544,11 +568,15 @@ bool InstrProfiling::run(
   for (Function &F : M) {
     InstrProfIncrementInst *FirstProfIncInst = nullptr;
     for (BasicBlock &BB : F)
-      for (auto I = BB.begin(), E = BB.end(); I != E; I++)
-        if (auto *Ind = dyn_cast<InstrProfValueProfileInst>(I))
+      for (auto I = BB.begin(), E = BB.end(); I != E; I++) {
+        if (auto *Ind = dyn_cast<InstrProfValueProfileInst>(I)) {
           computeNumValueSiteCounts(Ind);
-        else if (FirstProfIncInst == nullptr)
+        } else if (auto *Gep = dyn_cast<InstrVPGepInst>(I)) {
+          computeNumValueSiteCountsGep(Gep);
+        } else if (FirstProfIncInst == nullptr) {
           FirstProfIncInst = dyn_cast<InstrProfIncrementInst>(I);
+        }
+      }
 
     // Value profiling intrinsic lowering requires per-function profile data
     // variable to be created first.
@@ -608,6 +636,21 @@ getOrInsertValueProfilingCall(Module &M, const TargetLibraryInfo &TLI,
   }
 }
 
+
+void InstrProfiling::computeNumValueSiteCountsGep(InstrVPGepInst* Gep) {
+  GlobalVariable *Name = Gep->getName();
+  uint64_t ValueKind = IPVK_GepOffset;
+  uint64_t Size = Gep->getNumCounters()->getZExtValue();
+  auto It = ProfileDataMap.find(Name);
+  if (It == ProfileDataMap.end()) {
+    PerFunctionProfileData PD;
+    PD.NumValueSites[ValueKind] = Size;
+    ProfileDataMap[Name] = PD;
+  } else {
+    It->second.NumValueSites[ValueKind] = Size;
+  }
+}
+
 void InstrProfiling::computeNumValueSiteCounts(InstrProfValueProfileInst *Ind) {
   GlobalVariable *Name = Ind->getName();
   uint64_t ValueKind = Ind->getValueKind()->getZExtValue();
@@ -619,6 +662,192 @@ void InstrProfiling::computeNumValueSiteCounts(InstrProfValueProfileInst *Ind) {
     ProfileDataMap[Name] = PD;
   } else if (It->second.NumValueSites[ValueKind] <= Index)
     It->second.NumValueSites[ValueKind] = Index + 1;
+}
+
+GlobalVariable *
+InstrProfiling::getOrCreateGepLastOffsetCounters(InstrVPGepInst *VPGep) {
+  GlobalVariable *NamePtr = VPGep->getName();
+  auto It = ProfileDataMap.find(NamePtr);
+  PerFunctionProfileData PD;
+  if (It != ProfileDataMap.end()) {
+    if (It->second.LastGepOffsetCounters)
+      return It->second.LastGepOffsetCounters;
+    PD = It->second;
+  }
+
+  // Match the linkage and visibility of the name global. COFF supports using
+  // comdats with internal symbols, so do that if we can.
+  Function *Fn = VPGep->getParent()->getParent();
+  GlobalValue::LinkageTypes Linkage = NamePtr->getLinkage();
+  GlobalValue::VisibilityTypes Visibility = NamePtr->getVisibility();
+  if (TT.isOSBinFormatCOFF()) {
+    Linkage = GlobalValue::InternalLinkage;
+    Visibility = GlobalValue::DefaultVisibility;
+  }
+
+  // Move the name variable to the right section. Place them in a COMDAT group
+  // if the associated function is a COMDAT. This will make sure that only one
+  // copy of counters of the COMDAT function will be emitted after linking. Keep
+  // in mind that this pass may run before the inliner, so we need to create a
+  // new comdat group for the counters and profiling data. If we use the comdat
+  // of the parent function, that will result in relocations against discarded
+  // sections.
+  bool NeedComdat = needsComdatForCounter(*Fn, *M);
+  if (NeedComdat) {
+    if (TT.isOSBinFormatCOFF()) {
+      // For COFF, put the counters, data, and values each into their own
+      // comdats. We can't use a group because the Visual C++ linker will
+      // report duplicate symbol errors if there are multiple external symbols
+      // with the same name marked IMAGE_COMDAT_SELECT_ASSOCIATIVE.
+      Linkage = GlobalValue::LinkOnceODRLinkage;
+      Visibility = GlobalValue::HiddenVisibility;
+    }
+  }
+  auto MaybeSetComdat = [=](GlobalVariable *GV) {
+    if (NeedComdat)
+      GV->setComdat(M->getOrInsertComdat(GV->getName()));
+  };
+
+  uint64_t NumCounters = VPGep->getNumCounters()->getZExtValue();
+  LLVMContext &Ctx = M->getContext();
+  ArrayType *CounterTy = ArrayType::get(Type::getInt64Ty(Ctx), NumCounters);
+
+  // Create the counters variable.
+  auto *LastGepOffsetCounterPtr = new GlobalVariable(
+      *M, CounterTy, false, Linkage, Constant::getNullValue(CounterTy),
+      getVarName(VPGep, getGepOffsetCountersVarPrefix()));
+  LastGepOffsetCounterPtr->setVisibility(Visibility);
+  LastGepOffsetCounterPtr->setSection(
+      getInstrProfSectionName(IPSK_Gep_Offset, TT.getObjectFormat()));
+  LastGepOffsetCounterPtr->setAlignment(Align(8));
+  MaybeSetComdat(LastGepOffsetCounterPtr);
+  LastGepOffsetCounterPtr->setLinkage(Linkage);
+
+  PD.LastGepOffsetCounters = LastGepOffsetCounterPtr;
+  ProfileDataMap[NamePtr] = PD;
+
+  // Now that the linkage set by the FE has been passed to the data and counter
+  // variables, reset Name variable's linkage and visibility to private so that
+  // it can be removed later by the compiler.
+  NamePtr->setLinkage(GlobalValue::PrivateLinkage);
+  // Collect the referenced names to be used by emitNameData.
+  if (std::find(ReferencedNames.begin(), ReferencedNames.end(), NamePtr) ==
+      ReferencedNames.end()) {
+    ReferencedNames.push_back(NamePtr);
+  }
+
+  return LastGepOffsetCounterPtr;
+}
+
+// Should return the GEP instruction immediately preceding the intrinsic
+// Null pointer if it can not be found
+static Instruction* findLoad(InstrVPGepInst *VPGep) {
+  BasicBlock* ParentBB = VPGep->getParent();
+  auto InstrIterator = ParentBB->begin();
+  while (InstrIterator != ParentBB->end()) {
+    if (dyn_cast<InstrVPGepInst>(InstrIterator) == VPGep) {
+      if (auto* Load = dyn_cast<LoadInst>(InstrIterator->getNextNode())) {
+        return Load;
+      }
+    }
+    InstrIterator ++;
+  }
+  return nullptr;
+}
+
+// When generating value profiling calls on Windows routines that make use of
+// handler funclets for exception processing an operand bundle needs to attached
+// to the called function. This routine will set \p OpBundles to contain the
+// funclet information, if any is needed, that should be placed on the generated
+// value profiling call for the value profile candidate call.
+static void
+populateEHOperandBundle(VPCandidateInfo &Cand,
+                        DenseMap<BasicBlock *, ColorVector> &BlockColors,
+                        SmallVectorImpl<OperandBundleDef> &OpBundles) {
+  auto *OrigCall = dyn_cast<CallBase>(Cand.AnnotatedInst);
+  if (OrigCall && !isa<IntrinsicInst>(OrigCall)) {
+    // The instrumentation call should belong to the same funclet as a
+    // non-intrinsic call, so just copy the operand bundle, if any exists.
+    Optional<OperandBundleUse> ParentFunclet =
+        OrigCall->getOperandBundle(LLVMContext::OB_funclet);
+    if (ParentFunclet)
+      OpBundles.emplace_back(OperandBundleDef(*ParentFunclet));
+  } else {
+    // Intrinsics or other instructions do not get funclet information from the
+    // front-end. Need to use the BlockColors that was computed by the routine
+    // colorEHFunclets to determine whether a funclet is needed.
+    if (!BlockColors.empty()) {
+      const ColorVector &CV = BlockColors.find(OrigCall->getParent())->second;
+      assert(CV.size() == 1 && "non-unique color for block!");
+      Instruction *EHPad = CV.front()->getFirstNonPHI();
+      if (EHPad->isEHPad())
+        OpBundles.emplace_back("funclet", EHPad);
+    }
+  }
+}
+
+void InstrProfiling::lowerVPGepInst(InstrVPGepInst *VPGep) {
+  GlobalVariable *LastGepOffsetCounters =
+      getOrCreateGepLastOffsetCounters(VPGep);
+
+  // Create the VP candidate info
+  VPCandidateInfo CandidateInfo;
+  CandidateInfo.AnnotatedInst = findLoad(VPGep);
+  CandidateInfo.InsertPt = VPGep;
+
+  if (!CandidateInfo.AnnotatedInst) {
+    dbgs() << "Could not find Load for " << *VPGep << ". The Load was probably optimised out. Removing intrinsic without lowering to VP calls.\n";
+    VPGep->eraseFromParent();
+    return;
+  }
+
+  IRBuilder<> Builder(VPGep);
+
+  IntegerType *Type = VPGep->getSelfIndex()->getType();
+
+  dbgs() << VPGep->getOffset()->getType()->getIntegerBitWidth();
+
+  // Get the last offset
+  Value *LastAddressAddr = Builder.CreateInBoundsGEP(
+      LastGepOffsetCounters->getValueType(), LastGepOffsetCounters,
+      {ConstantInt::get(Type, 0), VPGep->getSelfIndex()}, "LastAddressAddr");
+  Value *LastAddress =
+      Builder.CreateLoad(Type, LastAddressAddr, "LastAddress");
+
+  // Calculate the new stride
+  Value *Stride = Builder.CreateSub(VPGep->getOffset(), LastAddress, "Stride");
+//  Value *StrideExtended = Builder.CreateZExtOrTrunc(Stride, Builder.getInt64Ty());
+
+
+  CandidateInfo.V = Stride;
+
+  // Store the current offset
+  Builder.CreateStore(VPGep->getOffset(), LastAddressAddr);
+
+  std::cout << "Lowered VPGep Instance " << std::endl;
+
+  DenseMap<BasicBlock *, ColorVector> BlockColors;
+  SmallVector<OperandBundleDef, 1> OpBundles;
+  populateEHOperandBundle(CandidateInfo, BlockColors, OpBundles);
+
+  // TODO FIX HARD CODED CONSTANTS IN THIS CALL
+  // TODO Potentially remove the extended stride
+  CallInst* VPCall = Builder.CreateCall(
+      Intrinsic::getDeclaration(M, Intrinsic::instrprof_value_profile),
+      {
+          VPGep->getArgOperand(0),
+          VPGep->getArgOperand(1),
+          Stride,
+          Builder.getInt32(IPVK_GepOffset),
+          VPGep->getArgOperand(5)},
+      OpBundles);
+
+  auto* InstrProfVal = dyn_cast<InstrProfValueProfileInst>(VPCall);
+
+  lowerValueProfileInst(InstrProfVal);
+
+  std::cout << "Lowered Value Profiling of Stride Instance " << std::endl;
+  VPGep->eraseFromParent();
 }
 
 void InstrProfiling::lowerValueProfileInst(InstrProfValueProfileInst *Ind) {
@@ -638,6 +867,7 @@ void InstrProfiling::lowerValueProfileInst(InstrProfValueProfileInst *Ind) {
                   llvm::InstrProfValueKind::IPVK_MemOPSize);
   CallInst *Call = nullptr;
   auto *TLI = &GetTLI(*Ind->getFunction());
+
 
   // To support value profiling calls within Windows exception handlers, funclet
   // information contained within operand bundles needs to be copied over to
@@ -685,11 +915,12 @@ void InstrProfiling::lowerIncrement(InstrProfIncrementInst *Inc) {
     if (!LI) {
       IRBuilder<> Builder(&I);
       Type *Int64Ty = Type::getInt64Ty(M->getContext());
-      GlobalVariable *Bias = M->getGlobalVariable(getInstrProfCounterBiasVarName());
+      GlobalVariable *Bias =
+          M->getGlobalVariable(getInstrProfCounterBiasVarName());
       if (!Bias) {
-        Bias = new GlobalVariable(*M, Int64Ty, false, GlobalValue::LinkOnceODRLinkage,
-                                  Constant::getNullValue(Int64Ty),
-                                  getInstrProfCounterBiasVarName());
+        Bias = new GlobalVariable(
+            *M, Int64Ty, false, GlobalValue::LinkOnceODRLinkage,
+            Constant::getNullValue(Int64Ty), getInstrProfCounterBiasVarName());
         Bias->setVisibility(GlobalVariable::HiddenVisibility);
       }
       LI = Builder.CreateLoad(Int64Ty, Bias);
@@ -728,22 +959,6 @@ void InstrProfiling::lowerCoverageData(GlobalVariable *CoverageNamesVar) {
   CoverageNamesVar->eraseFromParent();
 }
 
-/// Get the name of a profiling variable for a particular function.
-static std::string getVarName(InstrProfIncrementInst *Inc, StringRef Prefix) {
-  StringRef NamePrefix = getInstrProfNameVarPrefix();
-  StringRef Name = Inc->getName()->getName().substr(NamePrefix.size());
-  Function *F = Inc->getParent()->getParent();
-  Module *M = F->getParent();
-  if (!DoHashBasedCounterSplit || !isIRPGOFlagSet(M) ||
-      !canRenameComdatFunc(*F))
-    return (Prefix + Name).str();
-  uint64_t FuncHash = Inc->getHash()->getZExtValue();
-  SmallVector<char, 24> HashPostfix;
-  if (Name.endswith((Twine(".") + Twine(FuncHash)).toStringRef(HashPostfix)))
-    return (Prefix + Name).str();
-  return (Prefix + Name + "." + Twine(FuncHash)).str();
-}
-
 static inline bool shouldRecordFunctionAddr(Function *F) {
   // Check the linkage
   bool HasAvailableExternallyLinkage = F->hasAvailableExternallyLinkage();
@@ -780,8 +995,7 @@ static bool needsRuntimeRegistrationOfSectionRange(const Triple &TT) {
     return false;
   // Use linker script magic to get data/cnts/name start/end.
   if (TT.isOSLinux() || TT.isOSFreeBSD() || TT.isOSNetBSD() ||
-      TT.isOSSolaris() || TT.isOSFuchsia() || TT.isPS4CPU() ||
-      TT.isOSWindows())
+      TT.isOSSolaris() || TT.isOSFuchsia() || TT.isPS4CPU() || TT.isOSWindows())
     return false;
 
   return true;
@@ -836,10 +1050,9 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
   ArrayType *CounterTy = ArrayType::get(Type::getInt64Ty(Ctx), NumCounters);
 
   // Create the counters variable.
-  auto *CounterPtr =
-      new GlobalVariable(*M, CounterTy, false, Linkage,
-                         Constant::getNullValue(CounterTy),
-                         getVarName(Inc, getInstrProfCountersVarPrefix()));
+  auto *CounterPtr = new GlobalVariable(
+      *M, CounterTy, false, Linkage, Constant::getNullValue(CounterTy),
+      getVarName(Inc, getInstrProfCountersVarPrefix()));
   CounterPtr->setVisibility(Visibility);
   CounterPtr->setSection(
       getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
@@ -858,10 +1071,9 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
     if (NS) {
       ArrayType *ValuesTy = ArrayType::get(Type::getInt64Ty(Ctx), NS);
 
-      auto *ValuesVar =
-          new GlobalVariable(*M, ValuesTy, false, Linkage,
-                             Constant::getNullValue(ValuesTy),
-                             getVarName(Inc, getInstrProfValuesVarPrefix()));
+      auto *ValuesVar = new GlobalVariable(
+          *M, ValuesTy, false, Linkage, Constant::getNullValue(ValuesTy),
+          getVarName(Inc, getInstrProfValuesVarPrefix()));
       ValuesVar->setVisibility(Visibility);
       ValuesVar->setSection(
           getInstrProfSectionName(IPSK_vals, TT.getObjectFormat()));
@@ -978,8 +1190,8 @@ void InstrProfiling::emitNameData() {
   }
 
   auto &Ctx = M->getContext();
-  auto *NamesVal = ConstantDataArray::getString(
-      Ctx, StringRef(CompressedNameStr), false);
+  auto *NamesVal =
+      ConstantDataArray::getString(Ctx, StringRef(CompressedNameStr), false);
   NamesVar = new GlobalVariable(*M, NamesVal->getType(), true,
                                 GlobalValue::PrivateLinkage, NamesVal,
                                 getInstrProfNamesVarName());

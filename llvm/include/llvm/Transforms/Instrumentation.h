@@ -150,6 +150,10 @@ struct InstrProfOptions {
 ModulePass *createInstrProfilingLegacyPass(
     const InstrProfOptions &Options = InstrProfOptions(), bool IsCS = false);
 
+FunctionPass *createSwPrefetchPass();
+
+FunctionPass *createValuePrefetchingPass();
+
 ModulePass *createInstrOrderFilePass();
 
 // Insert DataFlowSanitizer (dynamic data flow analysis) instrumentation

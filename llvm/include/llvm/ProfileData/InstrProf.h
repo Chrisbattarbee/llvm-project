@@ -87,6 +87,9 @@ inline StringRef getInstrProfDataVarPrefix() { return "__profd_"; }
 /// Return the name prefix of profile counter variables.
 inline StringRef getInstrProfCountersVarPrefix() { return "__profc_"; }
 
+/// Return the name prefix of the counters for gep offset
+inline StringRef getGepOffsetCountersVarPrefix() { return "__gep_offset_counters_"; }
+
 /// Return the name prefix of value profile variables.
 inline StringRef getInstrProfValuesVarPrefix() { return "__profvp_"; }
 
@@ -787,6 +790,7 @@ private:
   struct ValueProfData {
     std::vector<InstrProfValueSiteRecord> IndirectCallSites;
     std::vector<InstrProfValueSiteRecord> MemOPSizes;
+    std::vector<InstrProfValueSiteRecord> GepOffsets;
   };
   std::unique_ptr<ValueProfData> ValueData;
 
@@ -809,6 +813,8 @@ private:
       return ValueData->IndirectCallSites;
     case IPVK_MemOPSize:
       return ValueData->MemOPSizes;
+    case IPVK_GepOffset:
+      return ValueData->GepOffsets;
     default:
       llvm_unreachable("Unknown value kind!");
     }
@@ -823,6 +829,8 @@ private:
       return ValueData->IndirectCallSites;
     case IPVK_MemOPSize:
       return ValueData->MemOPSizes;
+    case IPVK_GepOffset:
+      return ValueData->GepOffsets;
     default:
       llvm_unreachable("Unknown value kind!");
     }
