@@ -3,8 +3,8 @@
 __attribute__((noinline))
 int test(int a, int b) {
   for (volatile int x = 0; x < 100000; x ++) {
-	  a += b > a ? a : b;
-	}
+    a += x > 50000 ? a : b;
+  }
   return a;
 }
 

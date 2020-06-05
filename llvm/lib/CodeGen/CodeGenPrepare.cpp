@@ -5988,7 +5988,20 @@ static bool isFormingBranchFromSelectProfitable(const TargetTransformInfo *TTI,
     if (Sum != 0) {
       auto Probability = BranchProbability::getBranchProbability(Max, Sum);
       if (Probability > TLI->getPredictableBranchThreshold())
+        dbgs() << "Converting " << *SI << " into branch because of standard branch probabilities.\n";
         return true;
+    }
+  }
+
+  // Clusteredness
+  if (SI->getMetadata(LLVMContext::MD_Clusteredness)) {
+    uint64_t SameClusteredness = mdconst::dyn_extract<ConstantInt>(SI->getMetadata(LLVMContext::MD_Clusteredness)->getOperand(1))->getZExtValue();
+    uint64_t NotSameClusteredness = mdconst::dyn_extract<ConstantInt>(SI->getMetadata(LLVMContext::MD_Clusteredness)->getOperand(2))->getZExtValue();
+    float ratio = ((float)SameClusteredness) / ((float)(SameClusteredness + NotSameClusteredness));
+    // TODO EXPERIMENT WITH THIS
+    if (ratio > 0.9) {
+      dbgs() << "Converting " << *SI << " into branch because of clusteredness.\n";
+      return true;
     }
   }
 
