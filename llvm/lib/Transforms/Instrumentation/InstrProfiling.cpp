@@ -462,6 +462,10 @@ bool InstrProfiling::lowerIntrinsics(Function *F) {
                      dyn_cast<InstrProfClusterednessUpdate>(Instr)) {
         lowerClusterednessUpdate(Cluster);
         MadeChange = true;
+      } else if (auto *Cluster =
+          dyn_cast<InstrProfClusterednessUpdateSelect>(Instr)) {
+        lowerClusterednessUpdateSelect(Cluster);
+        MadeChange = true;
       } else if (auto *BBUpdate = dyn_cast<InstrProfCurrentBBUpdate>(Instr)) {
         lowerCurrentBBUpdate(BBUpdate);
         MadeChange = true;
@@ -553,8 +557,10 @@ InstrProfiling::getOrCreateBBCounter(InstrumentIntrinsic *Instr) {
   return CurrentBBCounter;
 }
 
+
+template <typename ClusterednessIntrins>
 GlobalVariable *InstrProfiling::getOrCreateClusterednessLastIdCounters(
-    InstrProfClusterednessUpdate *Cluster) {
+    ClusterednessIntrins *Cluster) {
   GlobalVariable *NamePtr = Cluster->getName();
   auto It = ProfileDataMap.find(NamePtr);
   PerFunctionProfileData PD;
@@ -628,8 +634,10 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessLastIdCounters(
   return LastIdCounterPtr;
 }
 
+
+template <typename ClusterednessIntrins>
 GlobalVariable *InstrProfiling::getOrCreateClusterednessSameCounters(
-    InstrProfClusterednessUpdate *Cluster) {
+    ClusterednessIntrins *Cluster) {
   GlobalVariable *NamePtr = Cluster->getName();
   auto It = ProfileDataMap.find(NamePtr);
   PerFunctionProfileData PD;
@@ -708,8 +716,9 @@ GlobalVariable *InstrProfiling::getOrCreateClusterednessSameCounters(
   return SameCounterPtr;
 }
 
+template <typename ClusterednessIntrins>
 GlobalVariable *InstrProfiling::getOrCreateClusterednessNotSameCounters(
-    InstrProfClusterednessUpdate *Cluster) {
+    ClusterednessIntrins *Cluster) {
   GlobalVariable *NamePtr = Cluster->getName();
   auto It = ProfileDataMap.find(NamePtr);
   PerFunctionProfileData PD;
@@ -842,6 +851,61 @@ bool InstrProfiling::lowerClusterednessUpdate(
 
   Value *StoreSelfIndexInLastId =
       Builder.CreateStore(Cluster->getSelfIndex(), ParentLastIdAddr);
+
+  Cluster->eraseFromParent();
+  return true;
+}
+
+
+// TODO: Deal with runtime relocation same as instrprof_increment
+// TODO: Add atomic updates maybe same as instrprof_increment
+bool InstrProfiling::lowerClusterednessUpdateSelect(
+    InstrProfClusterednessUpdateSelect *Cluster) {
+  GlobalVariable *LastIdCounters =
+      getOrCreateClusterednessLastIdCounters(Cluster);
+  GlobalVariable *SameCounters = getOrCreateClusterednessSameCounters(Cluster);
+  GlobalVariable *NotSameCounters =
+      getOrCreateClusterednessNotSameCounters(Cluster);
+
+  IRBuilder<> Builder(Cluster);
+
+  IntegerType *Type = Cluster->getSelfIndex()->getType();
+  Value *LastCondValueAddr = Builder.CreateInBoundsGEP(
+      LastIdCounters, {ConstantInt::get(Type, 0), Cluster->getSelfIndex()});
+
+  Value *SameAddress =
+      Builder.CreateInBoundsGEP(SameCounters->getValueType(), SameCounters,
+                                {ConstantInt::get(Type, 0), Cluster->getSelfIndex()});
+  Value *NotSameAddress = Builder.CreateInBoundsGEP(
+      NotSameCounters->getValueType(), NotSameCounters,
+      {ConstantInt::get(Type, 0), Cluster->getSelfIndex()});
+
+  Value *LastCondValue =
+      Builder.CreateLoad(Type, LastCondValueAddr, "lastcondvalue");
+  Value *LoadSameValue =
+      Builder.CreateLoad(Type, SameAddress, "samevalue");
+  Value *LoadNotSameValue =
+      Builder.CreateLoad(Type, NotSameAddress, "notsamevalue");
+
+  Value *ComparisonValue =
+      Builder.CreateICmp(CmpInst::ICMP_EQ, LastCondValue,
+                         Cluster->getCondVal(), "CondComparison");
+
+  Value *SameIncrementValue =
+      Builder.CreateSelect(ComparisonValue, ConstantInt::get(Type, 1, true),
+                           ConstantInt::get(Type, 0, true));
+  Value *AddSame = Builder.CreateAdd(LoadSameValue, SameIncrementValue);
+  Value *StoreSame = Builder.CreateStore(AddSame, SameAddress);
+
+  Value *NotSameIncrementValue =
+      Builder.CreateSelect(ComparisonValue, ConstantInt::get(Type, 0, true),
+                           ConstantInt::get(Type, 1, true));
+  Value *AddNotSame =
+      Builder.CreateAdd(LoadNotSameValue, NotSameIncrementValue);
+  Value *StoreNotSame = Builder.CreateStore(AddNotSame, NotSameAddress);
+
+  Value *StoreSelfIndexInLastId =
+      Builder.CreateStore(Cluster->getCondVal(), LastCondValueAddr);
 
   Cluster->eraseFromParent();
   return true;

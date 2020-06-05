@@ -52,6 +52,24 @@ MDNode *MDBuilder::createBranchWeights(ArrayRef<uint32_t> Weights) {
   return MDNode::get(Context, Vals);
 }
 
+MDNode *MDBuilder::createClusteredness(uint32_t SameClusteredness,
+                                       uint32_t NotSameClusteredness) {
+  return createClusteredness({SameClusteredness, NotSameClusteredness});
+}
+
+MDNode *MDBuilder::createClusteredness(ArrayRef<uint32_t> Clusteredness) {
+  assert(Clusteredness.size() >= 1 && "Need at least one branch weights!");
+
+  SmallVector<Metadata *, 4> Vals( 3);
+  Vals[0] = createString("clusteredness");
+
+  Type *Int32Ty = Type::getInt32Ty(Context);
+  for (unsigned i = 0, e = Clusteredness.size(); i != e; ++i)
+    Vals[i + 1] = createConstant(ConstantInt::get(Int32Ty, Clusteredness[i]));
+
+  return MDNode::get(Context, Vals);
+}
+
 MDNode *MDBuilder::createUnpredictable() {
   return MDNode::get(Context, None);
 }

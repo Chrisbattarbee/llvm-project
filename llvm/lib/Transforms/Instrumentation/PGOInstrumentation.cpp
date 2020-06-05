@@ -318,6 +318,7 @@ struct SelectInstVisitor : public InstVisitor<SelectInstVisitor> {
   GlobalVariable *FuncNameVar = nullptr;
   uint64_t FuncHash = 0;
   PGOUseFunc *UseFunc = nullptr;
+  bool IsClusteredness = false;
 
   SelectInstVisitor(Function &Func) : F(Func) {}
 
@@ -332,20 +333,22 @@ struct SelectInstVisitor : public InstVisitor<SelectInstVisitor> {
   // is the total number of counters; \p FNV is the pointer to the
   // PGO function name var; \p FHash is the function hash.
   void instrumentSelects(Function &Func, unsigned *Ind, unsigned TotalNC,
-                         GlobalVariable *FNV, uint64_t FHash) {
+                         GlobalVariable *FNV, uint64_t FHash, bool IsCluster) {
     Mode = VM_instrument;
     CurCtrIdx = Ind;
     TotalNumCtrs = TotalNC;
     FuncHash = FHash;
     FuncNameVar = FNV;
+    IsClusteredness = IsCluster;
     visit(Func);
   }
 
   // Visit the IR stream and annotate all select instructions.
-  void annotateSelects(Function &Func, PGOUseFunc *UF, unsigned *Ind) {
+  void annotateSelects(Function &Func, PGOUseFunc *UF, unsigned *Ind, bool IsCluster) {
     Mode = VM_annotate;
     UseFunc = UF;
     CurCtrIdx = Ind;
+    IsClusteredness = IsCluster;
     visit(Func);
   }
 
@@ -912,7 +915,7 @@ static void instrumentOneFunc(
 
   // Now instrument select instructions:
   FuncInfo.SIVisitor.instrumentSelects(F, &I, NumCounters, FuncInfo.FuncNameVar,
-                                       FuncInfo.FunctionHash);
+                                       FuncInfo.FunctionHash, false);
   assert(I == NumCounters);
 
   // Clusteredness
@@ -937,8 +940,7 @@ static void instrumentOneFunc(
     BasicBlockLabelMap[BB] = I++;
   }
 
-  NumCounters = AllBBs.size(); // TODO Should also have the num of selects too
-                               // when this is implemented as is seen above
+  NumCounters = AllBBs.size() + FuncInfo.SIVisitor.getNumOfSelectInsts();
 
   I8PtrTy = Type::getInt8PtrTy(M->getContext());
   for (auto *InstrBB : AllBBs) {
@@ -969,7 +971,9 @@ static void instrumentOneFunc(
         });
   }
 
-  // TODO: Deal with select instructions as we see above
+  // Now instrument select instructions:
+  FuncInfo.SIVisitor.instrumentSelects(F, &I, NumCounters, FuncInfo.FuncNameVar,
+                                       FuncInfo.FunctionHash, true);
 
   if (DisableValueProfiling)
     return;
@@ -1279,6 +1283,7 @@ bool PGOUseFunc::setInstrumentedCounts(
     Info.setBBInfoSameClusteredness(ClusterednessSameCountValue);
     Info.setBBInfoNotSameClusteredness(ClusterednessNotSameCountValue);
 
+
     // TODO Fix the memory leak introduced by this
     if (!PGOInstrumentationUse::CountsMap) {
       PGOInstrumentationUse::CountsMap = new std::unordered_map<BasicBlock*, PGOInstrumentationUse::CountsHolder*>();
@@ -1287,8 +1292,20 @@ bool PGOUseFunc::setInstrumentedCounts(
     CHolder->ClusterednessSameCountFromProfile = ClusterednessSameCountValue;
     CHolder->ClusterednessNotSameCountFromProfile = ClusterednessNotSameCountValue;
     PGOInstrumentationUse::CountsMap->insert({BB, CHolder});
+
     J += 1;
+
+    // Add metadata
+    Instruction* TI = BB->getTerminator();
+    if (!(isa<BranchInst>(TI) || isa<SwitchInst>(TI) ||
+          isa<IndirectBrInst>(TI)))
+      continue;
+
+    MDBuilder MDB(M->getContext());
+    TI->setMetadata(LLVMContext::MD_Clusteredness, MDB.createClusteredness(ClusterednessSameCountValue, ClusterednessSameCountValue));
   }
+
+  FuncInfo.SIVisitor.annotateSelects(F, this, &J, true);
 
   // End Clusteredness
 
@@ -1495,7 +1512,7 @@ void PGOUseFunc::populateCounters() {
   markFunctionAttributes(FuncEntryCount, FuncMaxCount);
 
   // Now annotate select instructions
-  FuncInfo.SIVisitor.annotateSelects(F, this, &CountPosition);
+  FuncInfo.SIVisitor.annotateSelects(F, this, &CountPosition, false);
   assert(CountPosition == ProfileCountSize);
 
   LLVM_DEBUG(FuncInfo.dumpInfo("after reading profile."));
@@ -1566,31 +1583,56 @@ void SelectInstVisitor::instrumentOneSelectInst(SelectInst &SI) {
   IRBuilder<> Builder(&SI);
   Type *Int64Ty = Builder.getInt64Ty();
   Type *I8PtrTy = Builder.getInt8PtrTy();
-  auto *Step = Builder.CreateZExt(SI.getCondition(), Int64Ty);
-  Builder.CreateCall(
-      Intrinsic::getDeclaration(M, Intrinsic::instrprof_increment_step),
-      {ConstantExpr::getBitCast(FuncNameVar, I8PtrTy),
-       Builder.getInt64(FuncHash), Builder.getInt32(TotalNumCtrs),
-       Builder.getInt32(*CurCtrIdx), Step});
+  if (IsClusteredness) {
+    auto *Cond = Builder.CreateZExt(SI.getCondition(), Int64Ty);
+    Builder.CreateCall(
+        Intrinsic::getDeclaration(M, Intrinsic::instrprof_clusteredness_update_select),
+        {
+            ConstantExpr::getBitCast(FuncNameVar, I8PtrTy),
+            Builder.getInt64(TotalNumCtrs),
+            Builder.getInt64(*CurCtrIdx),
+            Builder.getInt64(FuncHash),
+            Cond
+        });
+  } else {
+    auto *Step = Builder.CreateZExt(SI.getCondition(), Int64Ty);
+    Builder.CreateCall(
+        Intrinsic::getDeclaration(M, Intrinsic::instrprof_increment_step),
+        {ConstantExpr::getBitCast(FuncNameVar, I8PtrTy),
+         Builder.getInt64(FuncHash), Builder.getInt32(TotalNumCtrs),
+         Builder.getInt32(*CurCtrIdx), Step});
+  }
+
   ++(*CurCtrIdx);
 }
 
 void SelectInstVisitor::annotateOneSelectInst(SelectInst &SI) {
-  std::vector<uint64_t> &CountFromProfile = UseFunc->getProfileRecord().Counts;
-  assert(*CurCtrIdx < CountFromProfile.size() &&
-         "Out of bound access of counters");
-  uint64_t SCounts[2];
-  SCounts[0] = CountFromProfile[*CurCtrIdx]; // True count
+  if (IsClusteredness) {
+    std::vector<uint64_t> &ClusterednessSameFromProfile = UseFunc->getProfileRecord().ClusterednessSameCounts;
+    std::vector<uint64_t> &ClusterednessNotSameFromProfile = UseFunc->getProfileRecord().ClusterednessNotSameCounts;
+    MDBuilder MDB(SI.getContext());
+    assert(*CurCtrIdx < ClusterednessSameFromProfile.size() &&
+           "Out of bound access of counters");
+    SI.setMetadata(LLVMContext::MD_Clusteredness, MDB.createClusteredness(ClusterednessSameFromProfile[*CurCtrIdx], ClusterednessNotSameFromProfile[*CurCtrIdx]));
+    dbgs() << "Clusteredness same count for " << SI << " is " << *SI.getMetadata(LLVMContext::MD_Clusteredness)->getOperand(1) << "\n";
+    dbgs() << "Clusteredness not same count for " << SI << " is " << *SI.getMetadata(LLVMContext::MD_Clusteredness)->getOperand(2) << "\n";
+  } else {
+    std::vector<uint64_t> &CountFromProfile = UseFunc->getProfileRecord().Counts;
+    assert(*CurCtrIdx < CountFromProfile.size() &&
+           "Out of bound access of counters");
+    uint64_t SCounts[2];
+    SCounts[0] = CountFromProfile[*CurCtrIdx]; // True count
+    uint64_t TotalCount = 0;
+    auto BI = UseFunc->findBBInfo(SI.getParent());
+    if (BI != nullptr)
+      TotalCount = BI->CountValue;
+    // False Count
+    SCounts[1] = (TotalCount > SCounts[0] ? TotalCount - SCounts[0] : 0);
+    uint64_t MaxCount = std::max(SCounts[0], SCounts[1]);
+    if (MaxCount)
+      setProfMetadata(F.getParent(), &SI, SCounts, MaxCount);
+  }
   ++(*CurCtrIdx);
-  uint64_t TotalCount = 0;
-  auto BI = UseFunc->findBBInfo(SI.getParent());
-  if (BI != nullptr)
-    TotalCount = BI->CountValue;
-  // False Count
-  SCounts[1] = (TotalCount > SCounts[0] ? TotalCount - SCounts[0] : 0);
-  uint64_t MaxCount = std::max(SCounts[0], SCounts[1]);
-  if (MaxCount)
-    setProfMetadata(F.getParent(), &SI, SCounts, MaxCount);
 }
 
 void SelectInstVisitor::visitSelectInst(SelectInst &SI) {

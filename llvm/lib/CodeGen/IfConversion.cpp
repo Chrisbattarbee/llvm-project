@@ -1264,7 +1264,7 @@ void IfConverter::AnalyzeBlock(
       // TODO: Insert selectivity check here
       BasicBlock* IRBasicBlock = const_cast<BasicBlock*>(MBB.getBasicBlock());
       if (IRBasicBlock) {
-        PGOInstrumentationUse::CountsHolder* Counts = PGOInstrumentationUse::CountsMap->at(IRBasicBlock);
+        /* PGOInstrumentationUse::CountsHolder* Counts = PGOInstrumentationUse::CountsMap->at(IRBasicBlock);
         if (Counts &&
             shouldRemovePossibleIfConversionDueToClusteredness(
               Counts->ClusterednessSameCountFromProfile,
@@ -1275,7 +1275,7 @@ void IfConverter::AnalyzeBlock(
           BBI.IsAnalyzed = true;
           BBStack.pop_back();
           continue;
-        }
+        }*/
       }
 
       // Do not ifcvt if either path is a back edge to the entry block.

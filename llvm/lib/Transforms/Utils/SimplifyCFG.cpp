@@ -2422,6 +2422,7 @@ static bool FoldTwoEntryPHINode(PHINode *PN, const TargetTransformInfo &TTI,
 
   // We don't want this optimization if we are profiling because we want to
   // gather the result of the branch
+  /*
   if (PGOInstrumentationGen::IsEnabled) {
     return false;
   }
@@ -2442,6 +2443,8 @@ static bool FoldTwoEntryPHINode(PHINode *PN, const TargetTransformInfo &TTI,
       return false;
     }
   }
+   */
+
   assert(DomBlock && "Failed to find root DomBlock");
 
   LLVM_DEBUG(dbgs() << "FOUND IF CONDITION!  " << *IfCond

@@ -154,6 +154,9 @@ private:
   /// Replace clusteredness update with an update of the appropriate values.
   bool lowerClusterednessUpdate(InstrProfClusterednessUpdate *pUpdate);
 
+  /// Replace clusteredness update for selects with an update of the appropriate values.
+  bool lowerClusterednessUpdateSelect(InstrProfClusterednessUpdateSelect *pUpdate);
+
   /// Replace current BB update with an update of the appropriate values.
   bool lowerCurrentBBUpdate(InstrProfCurrentBBUpdate *BBUpdate);
 
@@ -188,17 +191,23 @@ private:
 
   /// Get the clusteredness last id counters for an update, creating them if
   /// necessary.
+  template <typename ClusterednessIntrins>
   GlobalVariable *
-  getOrCreateClusterednessLastIdCounters(InstrProfClusterednessUpdate *Cluster);
+  getOrCreateClusterednessLastIdCounters(ClusterednessIntrins *Cluster);
 
   /// Get the clusteredness same counters for an update, creating them if
   /// necessary.
+
+
+  template <typename ClusterednessIntrins>
   GlobalVariable *
-  getOrCreateClusterednessSameCounters(InstrProfClusterednessUpdate *Cluster);
+  getOrCreateClusterednessSameCounters(ClusterednessIntrins *Cluster);
 
   /// Get the clusteredness not same counters for an update, creating them if
   /// necessary.
-  GlobalVariable *getOrCreateClusterednessNotSameCounters(InstrProfClusterednessUpdate *Cluster);
+
+  template <typename ClusterednessIntrins>
+  GlobalVariable *getOrCreateClusterednessNotSameCounters(ClusterednessIntrins *Cluster);
 
   // Get the BBCounter for a function, creating it if necessary
   template <class InstrumentIntrinsic>
