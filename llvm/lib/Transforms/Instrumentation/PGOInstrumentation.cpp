@@ -169,7 +169,7 @@ static cl::opt<std::string> PGOTestProfileRemappingFile(
 
 // Command line option to disable value profiling. The default is false:
 // i.e. value profiling is enabled by default. This is for debug purpose.
-static cl::opt<bool> DisableValueProfiling("disable-vp", cl::init(false),
+static cl::opt<bool> DisableValueProfiling("disable-vp", cl::init(true),
                                            cl::Hidden,
                                            cl::desc("Disable Value Profiling"));
 
