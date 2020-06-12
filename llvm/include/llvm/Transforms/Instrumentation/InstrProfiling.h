@@ -47,10 +47,64 @@ private:
   Module *M;
   Triple TT;
   std::function<const TargetLibraryInfo &(Function &F)> GetTLI;
+
+  struct DataVarTempStorage {
+    uint64_t NumCounters = 0;
+    uint64_t NumNotSameCounters = 0;
+    uint64_t NumSameCounters = 0;
+    GlobalVariable *CounterPtr = nullptr;
+    GlobalVariable *SameCounterPtr = nullptr;
+    GlobalVariable *NotSameCounterPtr = nullptr;
+  };
+
+  void setDataVarRegionTempStorageCounters(DataVarTempStorage* Storage, GlobalVariable* Ptr, uint64_t Num) {
+    Storage->CounterPtr = Ptr;
+    Storage->NumCounters = Num;
+    if (!Storage->SameCounterPtr) {
+      Storage->SameCounterPtr = Ptr;
+      Storage->NumSameCounters = Num;
+    }
+    if (!Storage->NotSameCounterPtr) {
+      Storage->NotSameCounterPtr = Ptr;
+      Storage->NumNotSameCounters = Num;
+    }
+  }
+
+  void setDataVarRegionTempStorageSameCounters(DataVarTempStorage* Storage, GlobalVariable* Ptr, uint64_t Num) {
+    Storage->SameCounterPtr = Ptr;
+    Storage->NumSameCounters = Num;
+    if (!Storage->CounterPtr) {
+      Storage->CounterPtr = Ptr;
+      Storage->NumCounters = Num;
+    }
+    if (!Storage->NotSameCounterPtr) {
+      Storage->NotSameCounterPtr = Ptr;
+      Storage->NumNotSameCounters = Num;
+    }
+  }
+
+  void setDataVarRegionTempStorageNotSameCounters(DataVarTempStorage* Storage, GlobalVariable* Ptr, uint64_t Num) {
+    Storage->NotSameCounterPtr = Ptr;
+    Storage->NumNotSameCounters = Num;
+    if (!Storage->CounterPtr) {
+      Storage->CounterPtr = Ptr;
+      Storage->NumCounters = Num;
+    }
+    if (!Storage->SameCounterPtr) {
+      Storage->SameCounterPtr = Ptr;
+      Storage->NumSameCounters = Num;
+    }
+  }
+
   struct PerFunctionProfileData {
     uint32_t NumValueSites[IPVK_Last + 1];
     GlobalVariable *RegionCounters = nullptr;
+    GlobalVariable *LastIdCounters = nullptr;
+    GlobalVariable *SameTakenCounters = nullptr;
+    GlobalVariable *NotSameTakenCounters = nullptr;
+    GlobalVariable *CurrentBBCounter = nullptr;
     GlobalVariable *DataVar = nullptr;
+    DataVarTempStorage DataVarStorage;
 
     PerFunctionProfileData() {
       memset(NumValueSites, 0, sizeof(uint32_t) * (IPVK_Last + 1));
@@ -97,6 +151,15 @@ private:
   /// Replace instrprof_increment with an increment of the appropriate value.
   void lowerIncrement(InstrProfIncrementInst *Inc);
 
+  /// Replace clusteredness update with an update of the appropriate values.
+  bool lowerClusterednessUpdate(InstrProfClusterednessUpdate *pUpdate);
+
+  /// Replace clusteredness update for selects with an update of the appropriate values.
+  bool lowerClusterednessUpdateSelect(InstrProfClusterednessUpdateSelect *pUpdate);
+
+  /// Replace current BB update with an update of the appropriate values.
+  bool lowerCurrentBBUpdate(InstrProfCurrentBBUpdate *BBUpdate);
+
   /// Force emitting of name vars for unused functions.
   void lowerCoverageData(GlobalVariable *CoverageNamesVar);
 
@@ -125,8 +188,39 @@ private:
   /// Create a static initializer for our data, on platforms that need it,
   /// and for any profile output file that was specified.
   void emitInitialization();
-};
 
+  /// Get the clusteredness last id counters for an update, creating them if
+  /// necessary.
+  template <typename ClusterednessIntrins>
+  GlobalVariable *
+  getOrCreateClusterednessLastIdCounters(ClusterednessIntrins *Cluster);
+
+  /// Get the clusteredness same counters for an update, creating them if
+  /// necessary.
+
+
+  template <typename ClusterednessIntrins>
+  GlobalVariable *
+  getOrCreateClusterednessSameCounters(ClusterednessIntrins *Cluster);
+
+  /// Get the clusteredness not same counters for an update, creating them if
+  /// necessary.
+
+  template <typename ClusterednessIntrins>
+  GlobalVariable *getOrCreateClusterednessNotSameCounters(ClusterednessIntrins *Cluster);
+
+  // Get the BBCounter for a function, creating it if necessary
+  template <class InstrumentIntrinsic>
+  GlobalVariable *getOrCreateBBCounter(InstrumentIntrinsic *Instr);
+
+  template <class InstrumentIntrinsic>
+  GlobalVariable *updateProfileData(InstrumentIntrinsic *Instr,
+                              PerFunctionProfileData &PD, Function *Fn,
+                              GlobalValue::LinkageTypes &Linkage,
+                              GlobalValue::VisibilityTypes &Visibility,
+                              LLVMContext &Ctx,
+                              bool NeedComdat);
+};
 } // end namespace llvm
 
 #endif // LLVM_TRANSFORMS_INSTRPROFILING_H

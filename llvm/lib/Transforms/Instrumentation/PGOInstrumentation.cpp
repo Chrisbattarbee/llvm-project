@@ -115,10 +115,12 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <numeric>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -167,7 +169,7 @@ static cl::opt<std::string> PGOTestProfileRemappingFile(
 
 // Command line option to disable value profiling. The default is false:
 // i.e. value profiling is enabled by default. This is for debug purpose.
-static cl::opt<bool> DisableValueProfiling("disable-vp", cl::init(false),
+static cl::opt<bool> DisableValueProfiling("disable-vp", cl::init(true),
                                            cl::Hidden,
                                            cl::desc("Disable Value Profiling"));
 
@@ -316,6 +318,7 @@ struct SelectInstVisitor : public InstVisitor<SelectInstVisitor> {
   GlobalVariable *FuncNameVar = nullptr;
   uint64_t FuncHash = 0;
   PGOUseFunc *UseFunc = nullptr;
+  bool IsClusteredness = false;
 
   SelectInstVisitor(Function &Func) : F(Func) {}
 
@@ -330,20 +333,22 @@ struct SelectInstVisitor : public InstVisitor<SelectInstVisitor> {
   // is the total number of counters; \p FNV is the pointer to the
   // PGO function name var; \p FHash is the function hash.
   void instrumentSelects(Function &Func, unsigned *Ind, unsigned TotalNC,
-                         GlobalVariable *FNV, uint64_t FHash) {
+                         GlobalVariable *FNV, uint64_t FHash, bool IsCluster) {
     Mode = VM_instrument;
     CurCtrIdx = Ind;
     TotalNumCtrs = TotalNC;
     FuncHash = FHash;
     FuncNameVar = FNV;
+    IsClusteredness = IsCluster;
     visit(Func);
   }
 
   // Visit the IR stream and annotate all select instructions.
-  void annotateSelects(Function &Func, PGOUseFunc *UF, unsigned *Ind) {
+  void annotateSelects(Function &Func, PGOUseFunc *UF, unsigned *Ind, bool IsCluster) {
     Mode = VM_annotate;
     UseFunc = UF;
     CurCtrIdx = Ind;
+    IsClusteredness = IsCluster;
     visit(Func);
   }
 
@@ -358,7 +363,6 @@ struct SelectInstVisitor : public InstVisitor<SelectInstVisitor> {
   unsigned getNumOfSelectInsts() const { return NSIs; }
 };
 
-
 class PGOInstrumentationGenLegacyPass : public ModulePass {
 public:
   static char ID;
@@ -367,6 +371,7 @@ public:
       : ModulePass(ID), IsCS(IsCS) {
     initializePGOInstrumentationGenLegacyPassPass(
         *PassRegistry::getPassRegistry());
+    PGOInstrumentationGen::IsEnabled = true;
   }
 
   StringRef getPassName() const override { return "PGOInstrumentationGenPass"; }
@@ -392,6 +397,7 @@ public:
       ProfileFileName = PGOTestProfileFile;
     initializePGOInstrumentationUseLegacyPassPass(
         *PassRegistry::getPassRegistry());
+    PGOInstrumentationUse::IsEnabled = true;
   }
 
   StringRef getPassName() const override { return "PGOInstrumentationUsePass"; }
@@ -494,7 +500,8 @@ struct PGOEdge {
   // Return the information string of an edge.
   const std::string infoString() const {
     return (Twine(Removed ? "-" : " ") + (InMST ? " " : "*") +
-            (IsCritical ? "c" : " ") + "  W=" + Twine(Weight)).str();
+            (IsCritical ? "c" : " ") + "  W=" + Twine(Weight))
+        .str();
   }
 };
 
@@ -550,9 +557,25 @@ public:
   // InstrumentBBs.
   void getInstrumentBBs(std::vector<BasicBlock *> &InstrumentBBs);
 
+  // Get all the BBs, used for clusteredness
+  void getAllBBs(std::vector<BasicBlock *> &InstrumentBBs);
+
+  // Should only be called after the CFG is constructed
+  // Will return all of the BasicBlocks which are the logical parents of the
+  // provided Child
+  std::unordered_set<const BasicBlock *> getParents(BasicBlock *Child) {
+    std::unordered_set<const BasicBlock *> Parents;
+    for (auto &E : MST.AllEdges) {
+      if (E->DestBB == Child && E->SrcBB) {
+        Parents.insert(E->SrcBB);
+      }
+    }
+    return Parents;
+  }
+
   // Give an edge, find the BB that will be instrumented.
   // Return nullptr if there is no BB to be instrumented.
-  BasicBlock *getInstrBB(Edge *E);
+  BasicBlock *getInstrBB(Edge *E, bool RemoveIfMST = true);
 
   // Return the auxiliary BB information.
   BBInfo &getBBInfo(const BasicBlock *BB) const { return MST.getBBInfo(BB); }
@@ -562,8 +585,8 @@ public:
 
   // Dump edges and BB information.
   void dumpInfo(std::string Str = "") const {
-    MST.dumpEdges(dbgs(), Twine("Dump Function ") + FuncName + " Hash: " +
-                              Twine(FunctionHash) + "\t" + Str);
+    MST.dumpEdges(dbgs(), Twine("Dump Function ") + FuncName +
+                              " Hash: " + Twine(FunctionHash) + "\t" + Str);
   }
 
   FuncPGOInstrumentation(
@@ -748,12 +771,35 @@ void FuncPGOInstrumentation<Edge, BBInfo>::getInstrumentBBs(
   }
 }
 
+template <class Edge, class BBInfo>
+void FuncPGOInstrumentation<Edge, BBInfo>::getAllBBs(
+    std::vector<BasicBlock *> &InstrumentBBs) {
+  std::set<BasicBlock*> BBSet;
+  for (auto &E : MST.AllEdges) {
+    if (E->SrcBB) {
+      BBSet.insert(const_cast<BasicBlock*>(E->SrcBB));
+    }
+    if (E->DestBB) {
+      BBSet.insert(const_cast<BasicBlock*>(E->DestBB));
+    }
+  }
+  for (auto *BB: BBSet) {
+    InstrumentBBs.push_back(BB);
+  }
+}
+
 // Given a CFG E to be instrumented, find which BB to place the instrumented
 // code. The function will split the critical edge if necessary.
 template <class Edge, class BBInfo>
-BasicBlock *FuncPGOInstrumentation<Edge, BBInfo>::getInstrBB(Edge *E) {
-  if (E->InMST || E->Removed)
+BasicBlock *FuncPGOInstrumentation<Edge, BBInfo>::getInstrBB(Edge *E,
+                                                             bool RemoveIfMST) {
+  if (E->Removed) {
     return nullptr;
+  }
+
+  if (RemoveIfMST && E->InMST) {
+    return nullptr;
+  }
 
   BasicBlock *SrcBB = const_cast<BasicBlock *>(E->SrcBB);
   BasicBlock *DestBB = const_cast<BasicBlock *>(E->DestBB);
@@ -832,12 +878,17 @@ populateEHOperandBundle(VPCandidateInfo &Cand,
   }
 }
 
+bool compareBasicBlocks(BasicBlock* BB1, BasicBlock* BB2) {
+  return std::hash<std::string>{}(BB1->getName().str()) < std::hash<std::string>{}(BB2->getName().str());
+}
+
 // Visit all edge and instrument the edges not in MST, and do value profiling.
 // Critical edges will be split.
 static void instrumentOneFunc(
     Function &F, Module *M, BranchProbabilityInfo *BPI, BlockFrequencyInfo *BFI,
     std::unordered_multimap<Comdat *, GlobalValue *> &ComdatMembers,
     bool IsCS) {
+  std::cout << "Instrumenting function " << F.getName().str() << std::endl;
   // Split indirectbr critical edges here before computing the MST rather than
   // later in getInstrBB() to avoid invalidating it.
   SplitIndirectBrCriticalEdges(F, BPI, BFI);
@@ -864,8 +915,65 @@ static void instrumentOneFunc(
 
   // Now instrument select instructions:
   FuncInfo.SIVisitor.instrumentSelects(F, &I, NumCounters, FuncInfo.FuncNameVar,
-                                       FuncInfo.FunctionHash);
+                                       FuncInfo.FunctionHash, false);
   assert(I == NumCounters);
+
+  // Clusteredness
+  std::vector<BasicBlock *> AllBBs;
+  FuncInfo.getAllBBs(AllBBs);
+
+  // Remove duplicates
+  std::unordered_set<BasicBlock *> DuplicateRemoverSet(AllBBs.begin(),
+                                                       AllBBs.end());
+  AllBBs.clear();
+  AllBBs = std::vector<BasicBlock *>(DuplicateRemoverSet.begin(),
+                                     DuplicateRemoverSet.end());
+
+  // Sort the list of BBs so that the labelling is deterministic each time
+  // we create it
+  std::sort(AllBBs.begin(), AllBBs.end(), compareBasicBlocks);
+
+  // Assign each basic block to a unique id
+  std::unordered_map<const BasicBlock *, uint64_t> BasicBlockLabelMap;
+  I = 0;
+  for (auto *BB : AllBBs) {
+    BasicBlockLabelMap[BB] = I++;
+  }
+
+  NumCounters = AllBBs.size() + FuncInfo.SIVisitor.getNumOfSelectInsts();
+
+  I8PtrTy = Type::getInt8PtrTy(M->getContext());
+  for (auto *InstrBB : AllBBs) {
+    int SelfId = BasicBlockLabelMap.at(InstrBB);
+    IRBuilder<> Builder(InstrBB, InstrBB->getFirstInsertionPt());
+    assert(Builder.GetInsertPoint() != InstrBB->end() &&
+           "Cannot get the Instrumentation point");
+
+    // If we have a parent then we want to update their clusteredness counts
+    // This has to be before the basic block update count
+    if (!FuncInfo.getParents(InstrBB).empty()) {
+      Builder.CreateCall(
+          Intrinsic::getDeclaration(M, Intrinsic::instrprof_clusteredness_update),
+          {
+              ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
+              Builder.getInt64(NumCounters),
+              Builder.getInt64(SelfId),
+              Builder.getInt64(FuncInfo.FunctionHash)
+          });
+    }
+    // Update the current basic block
+    Builder.CreateCall(
+        Intrinsic::getDeclaration(M, Intrinsic::instrprof_current_bb_update),
+        {
+            ConstantExpr::getBitCast(FuncInfo.FuncNameVar, I8PtrTy),
+            Builder.getInt64(SelfId),
+            Builder.getInt64(FuncInfo.FunctionHash)
+        });
+  }
+
+  // Now instrument select instructions:
+  FuncInfo.SIVisitor.instrumentSelects(F, &I, NumCounters, FuncInfo.FuncNameVar,
+                                       FuncInfo.FunctionHash, true);
 
   if (DisableValueProfiling)
     return;
@@ -944,13 +1052,17 @@ using DirectEdges = SmallVector<PGOUseEdge *, 2>;
 // This class stores the auxiliary information for each BB.
 struct UseBBInfo : public BBInfo {
   uint64_t CountValue = 0;
+  uint64_t ClusterednessSameTakenValue = 0;
+  uint64_t ClusterednessNotSameTakenValue = 0;
   bool CountValid;
+  bool ClusterednessSameCountValid;
+  bool ClusterednessNotSameCountValid;
   int32_t UnknownCountInEdge = 0;
   int32_t UnknownCountOutEdge = 0;
   DirectEdges InEdges;
   DirectEdges OutEdges;
 
-  UseBBInfo(unsigned IX) : BBInfo(IX), CountValid(false) {}
+  UseBBInfo(unsigned IX) : BBInfo(IX), CountValid(false), ClusterednessSameCountValid(false), ClusterednessNotSameCountValid(false) {}
 
   UseBBInfo(unsigned IX, uint64_t C)
       : BBInfo(IX), CountValue(C), CountValid(true) {}
@@ -959,6 +1071,22 @@ struct UseBBInfo : public BBInfo {
   void setBBInfoCount(uint64_t Value) {
     CountValue = Value;
     CountValid = true;
+  }
+
+  void unsetCountValid() {
+    CountValid = false;
+  }
+
+  // Set the profile count value for this BB.
+  void setBBInfoSameClusteredness(uint64_t Value) {
+    ClusterednessSameTakenValue = Value;
+    ClusterednessSameCountValid = true;
+  }
+
+  // Set the profile count value for this BB.
+  void setBBInfoNotSameClusteredness(uint64_t Value) {
+    ClusterednessNotSameTakenValue = Value;
+    ClusterednessNotSameCountValid = true;
   }
 
   // Return the information string of this object.
@@ -1048,11 +1176,10 @@ public:
 
   Function &getFunc() const { return F; }
 
-  void dumpInfo(std::string Str = "") const {
-    FuncInfo.dumpInfo(Str);
-  }
+  void dumpInfo(std::string Str = "") const { FuncInfo.dumpInfo(Str); }
 
   uint64_t getProgramMaxCount() const { return ProgramMaxCount; }
+
 private:
   Function &F;
   Module *M;
@@ -1082,7 +1209,10 @@ private:
   bool IsCS;
 
   // Find the Instrumented BB and set the value. Return false on error.
-  bool setInstrumentedCounts(const std::vector<uint64_t> &CountFromProfile);
+  bool setInstrumentedCounts(
+      const std::vector<uint64_t> &CountFromProfile,
+      const std::vector<uint64_t> &ClusterednessSameCountFromProfile,
+      const std::vector<uint64_t> &ClusterednessNotSameCountFromProfile);
 
   // Set the edge counter value for the unknown edge -- there should be only
   // one unknown edge.
@@ -1107,7 +1237,9 @@ private:
 // Visit all the edges and assign the count value for the instrumented
 // edges and the BB. Return false on error.
 bool PGOUseFunc::setInstrumentedCounts(
-    const std::vector<uint64_t> &CountFromProfile) {
+    const std::vector<uint64_t> &CountFromProfile,
+    const std::vector<uint64_t> &ClusterednessSameCountFromProfile,
+    const std::vector<uint64_t> &ClusterednessNotSameCountFromProfile) {
 
   std::vector<BasicBlock *> InstrumentBBs;
   FuncInfo.getInstrumentBBs(InstrumentBBs);
@@ -1125,8 +1257,57 @@ bool PGOUseFunc::setInstrumentedCounts(
     UseBBInfo &Info = getBBInfo(InstrBB);
     Info.setBBInfoCount(CountValue);
   }
-  ProfileCountSize = CountFromProfile.size();
   CountPosition = I;
+  ProfileCountSize = CountFromProfile.size();
+
+  // Begin Clusterednesss
+  std::vector<BasicBlock *> AllBBs;
+  FuncInfo.getAllBBs(AllBBs);
+  // Sort the list of BBs so that the labelling is deterministic each time
+  // we create it
+  std::sort(AllBBs.begin(), AllBBs.end(), compareBasicBlocks);
+
+  // Remove duplicates
+  std::unordered_set<BasicBlock *> DuplicateRemoverSet(AllBBs.begin(),
+                                                       AllBBs.end());
+  AllBBs.clear();
+  AllBBs = std::vector<BasicBlock *>(DuplicateRemoverSet.begin(),
+                                     DuplicateRemoverSet.end());
+
+  // Currently clusteredness takes place at all BBs so we need this additional loop
+  uint32_t J = 0;
+  for (BasicBlock *BB : AllBBs) {
+    uint64_t ClusterednessSameCountValue = ClusterednessSameCountFromProfile[J];
+    uint64_t ClusterednessNotSameCountValue = ClusterednessNotSameCountFromProfile[J];
+    UseBBInfo &Info = getBBInfo(BB);
+    Info.setBBInfoSameClusteredness(ClusterednessSameCountValue);
+    Info.setBBInfoNotSameClusteredness(ClusterednessNotSameCountValue);
+
+
+    // TODO Fix the memory leak introduced by this
+    if (!PGOInstrumentationUse::CountsMap) {
+      PGOInstrumentationUse::CountsMap = new std::unordered_map<BasicBlock*, PGOInstrumentationUse::CountsHolder*>();
+    }
+    PGOInstrumentationUse::CountsHolder* CHolder = new PGOInstrumentationUse::CountsHolder;
+    CHolder->ClusterednessSameCountFromProfile = ClusterednessSameCountValue;
+    CHolder->ClusterednessNotSameCountFromProfile = ClusterednessNotSameCountValue;
+    PGOInstrumentationUse::CountsMap->insert({BB, CHolder});
+
+    J += 1;
+
+    // Add metadata
+    Instruction* TI = BB->getTerminator();
+    if (!(isa<BranchInst>(TI) || isa<SwitchInst>(TI) ||
+          isa<IndirectBrInst>(TI)))
+      continue;
+
+    MDBuilder MDB(M->getContext());
+    TI->setMetadata(LLVMContext::MD_Clusteredness, MDB.createClusteredness(ClusterednessSameCountValue, ClusterednessSameCountValue));
+  }
+
+  FuncInfo.SIVisitor.annotateSelects(F, this, &J, true);
+
+  // End Clusteredness
 
   // Set the edge count and update the count of unknown edges for BBs.
   auto setEdgeCount = [this](PGOUseEdge *E, uint64_t Value) -> void {
@@ -1177,13 +1358,15 @@ void PGOUseFunc::setEdgeCount(DirectEdges &Edges, uint64_t Value) {
     getBBInfo(E->DestBB).UnknownCountInEdge--;
     return;
   }
+//   Hypothesis for removing this check is that with clusteredness, we can have zero unknown edges
   llvm_unreachable("Cannot find the unknown count edge");
 }
 
 // Read the profile from ProfileFileName and assign the value to the
 // instrumented BB and the edges. This function also updates ProgramMaxCount.
 // Return true if the profile are successfully read, and false on errors.
-bool PGOUseFunc::readCounters(IndexedInstrProfReader *PGOReader, bool &AllZeros) {
+bool PGOUseFunc::readCounters(IndexedInstrProfReader *PGOReader,
+                              bool &AllZeros) {
   auto &Ctx = M->getContext();
   Expected<InstrProfRecord> Result =
       PGOReader->getInstrProfRecord(FuncInfo.FuncName, FuncInfo.FunctionHash);
@@ -1223,6 +1406,10 @@ bool PGOUseFunc::readCounters(IndexedInstrProfReader *PGOReader, bool &AllZeros)
   }
   ProfileRecord = std::move(Result.get());
   std::vector<uint64_t> &CountFromProfile = ProfileRecord.Counts;
+  std::vector<uint64_t> &ClusterednessSameCountsFromProfile =
+      ProfileRecord.ClusterednessSameCounts;
+  std::vector<uint64_t> &ClusterednessNotSameCountsFromProfile =
+      ProfileRecord.ClusterednessNotSameCounts;
 
   IsCS ? NumOfCSPGOFunc++ : NumOfPGOFunc++;
   LLVM_DEBUG(dbgs() << CountFromProfile.size() << " counts\n");
@@ -1233,18 +1420,19 @@ bool PGOUseFunc::readCounters(IndexedInstrProfReader *PGOReader, bool &AllZeros)
   }
   AllZeros = (ValueSum == 0);
 
-  LLVM_DEBUG(dbgs() << "SUM =  " << ValueSum << "\n");
+  LLVM_DEBUG(dbgs() << "SUM (Not including clusteredness) =  " << ValueSum << "\n");
 
   getBBInfo(nullptr).UnknownCountOutEdge = 2;
   getBBInfo(nullptr).UnknownCountInEdge = 2;
 
-  if (!setInstrumentedCounts(CountFromProfile)) {
+  if (!setInstrumentedCounts(CountFromProfile, ClusterednessSameCountsFromProfile, ClusterednessNotSameCountsFromProfile)) {
     LLVM_DEBUG(
         dbgs() << "Inconsistent number of counts, skipping this function");
     Ctx.diagnose(DiagnosticInfoPGOProfile(
         M->getName().data(),
-        Twine("Inconsistent number of counts in ") + F.getName().str()
-        + Twine(": the profile may be stale or there is a function name collision."),
+        Twine("Inconsistent number of counts in ") + F.getName().str() +
+            Twine(": the profile may be stale or there is a function name "
+                  "collision."),
         DS_Warning));
     return false;
   }
@@ -1324,7 +1512,7 @@ void PGOUseFunc::populateCounters() {
   markFunctionAttributes(FuncEntryCount, FuncMaxCount);
 
   // Now annotate select instructions
-  FuncInfo.SIVisitor.annotateSelects(F, this, &CountPosition);
+  FuncInfo.SIVisitor.annotateSelects(F, this, &CountPosition, false);
   assert(CountPosition == ProfileCountSize);
 
   LLVM_DEBUG(FuncInfo.dumpInfo("after reading profile."));
@@ -1395,31 +1583,56 @@ void SelectInstVisitor::instrumentOneSelectInst(SelectInst &SI) {
   IRBuilder<> Builder(&SI);
   Type *Int64Ty = Builder.getInt64Ty();
   Type *I8PtrTy = Builder.getInt8PtrTy();
-  auto *Step = Builder.CreateZExt(SI.getCondition(), Int64Ty);
-  Builder.CreateCall(
-      Intrinsic::getDeclaration(M, Intrinsic::instrprof_increment_step),
-      {ConstantExpr::getBitCast(FuncNameVar, I8PtrTy),
-       Builder.getInt64(FuncHash), Builder.getInt32(TotalNumCtrs),
-       Builder.getInt32(*CurCtrIdx), Step});
+  if (IsClusteredness) {
+    auto *Cond = Builder.CreateZExt(SI.getCondition(), Int64Ty);
+    Builder.CreateCall(
+        Intrinsic::getDeclaration(M, Intrinsic::instrprof_clusteredness_update_select),
+        {
+            ConstantExpr::getBitCast(FuncNameVar, I8PtrTy),
+            Builder.getInt64(TotalNumCtrs),
+            Builder.getInt64(*CurCtrIdx),
+            Builder.getInt64(FuncHash),
+            Cond
+        });
+  } else {
+    auto *Step = Builder.CreateZExt(SI.getCondition(), Int64Ty);
+    Builder.CreateCall(
+        Intrinsic::getDeclaration(M, Intrinsic::instrprof_increment_step),
+        {ConstantExpr::getBitCast(FuncNameVar, I8PtrTy),
+         Builder.getInt64(FuncHash), Builder.getInt32(TotalNumCtrs),
+         Builder.getInt32(*CurCtrIdx), Step});
+  }
+
   ++(*CurCtrIdx);
 }
 
 void SelectInstVisitor::annotateOneSelectInst(SelectInst &SI) {
-  std::vector<uint64_t> &CountFromProfile = UseFunc->getProfileRecord().Counts;
-  assert(*CurCtrIdx < CountFromProfile.size() &&
-         "Out of bound access of counters");
-  uint64_t SCounts[2];
-  SCounts[0] = CountFromProfile[*CurCtrIdx]; // True count
+  if (IsClusteredness) {
+    std::vector<uint64_t> &ClusterednessSameFromProfile = UseFunc->getProfileRecord().ClusterednessSameCounts;
+    std::vector<uint64_t> &ClusterednessNotSameFromProfile = UseFunc->getProfileRecord().ClusterednessNotSameCounts;
+    MDBuilder MDB(SI.getContext());
+    assert(*CurCtrIdx < ClusterednessSameFromProfile.size() &&
+           "Out of bound access of counters");
+    SI.setMetadata(LLVMContext::MD_Clusteredness, MDB.createClusteredness(ClusterednessSameFromProfile[*CurCtrIdx], ClusterednessNotSameFromProfile[*CurCtrIdx]));
+    dbgs() << "Clusteredness same count for " << SI << " is " << *SI.getMetadata(LLVMContext::MD_Clusteredness)->getOperand(1) << "\n";
+    dbgs() << "Clusteredness not same count for " << SI << " is " << *SI.getMetadata(LLVMContext::MD_Clusteredness)->getOperand(2) << "\n";
+  } else {
+    std::vector<uint64_t> &CountFromProfile = UseFunc->getProfileRecord().Counts;
+    assert(*CurCtrIdx < CountFromProfile.size() &&
+           "Out of bound access of counters");
+    uint64_t SCounts[2];
+    SCounts[0] = CountFromProfile[*CurCtrIdx]; // True count
+    uint64_t TotalCount = 0;
+    auto BI = UseFunc->findBBInfo(SI.getParent());
+    if (BI != nullptr)
+      TotalCount = BI->CountValue;
+    // False Count
+    SCounts[1] = (TotalCount > SCounts[0] ? TotalCount - SCounts[0] : 0);
+    uint64_t MaxCount = std::max(SCounts[0], SCounts[1]);
+    if (MaxCount)
+      setProfMetadata(F.getParent(), &SI, SCounts, MaxCount);
+  }
   ++(*CurCtrIdx);
-  uint64_t TotalCount = 0;
-  auto BI = UseFunc->findBBInfo(SI.getParent());
-  if (BI != nullptr)
-    TotalCount = BI->CountValue;
-  // False Count
-  SCounts[1] = (TotalCount > SCounts[0] ? TotalCount - SCounts[0] : 0);
-  uint64_t MaxCount = std::max(SCounts[0], SCounts[1]);
-  if (MaxCount)
-    setProfMetadata(F.getParent(), &SI, SCounts, MaxCount);
 }
 
 void SelectInstVisitor::visitSelectInst(SelectInst &SI) {
@@ -1467,8 +1680,8 @@ void PGOUseFunc::annotateValueSites(uint32_t Kind) {
     Ctx.diagnose(DiagnosticInfoPGOProfile(
         M->getName().data(),
         Twine("Inconsistent number of value sites for ") +
-            Twine(ValueProfKindDescr[Kind]) +
-            Twine(" profiling in \"") + F.getName().str() +
+            Twine(ValueProfKindDescr[Kind]) + Twine(" profiling in \"") +
+            F.getName().str() +
             Twine("\", possibly due to the use of a stale profile."),
         DS_Warning));
     return;
@@ -1568,7 +1781,7 @@ static bool annotateAllFunctions(
     ProfileSummaryInfo *PSI, bool IsCS) {
   LLVM_DEBUG(dbgs() << "Read in profile counters: ");
   auto &Ctx = M.getContext();
-  // Read the counter array from file.
+  // Read the counter arrays from file.
   auto ReaderOrErr =
       IndexedInstrProfReader::create(ProfileFileName, ProfileRemappingFileName);
   if (Error E = ReaderOrErr.takeError()) {
@@ -1692,6 +1905,10 @@ PGOInstrumentationUse::PGOInstrumentationUse(std::string Filename,
     ProfileRemappingFileName = PGOTestProfileRemappingFile;
 }
 
+std::unordered_map<BasicBlock*, PGOInstrumentationUse::CountsHolder*>* PGOInstrumentationUse::CountsMap = nullptr;
+bool PGOInstrumentationUse::IsEnabled = false;
+bool PGOInstrumentationGen::IsEnabled = false;
+
 PreservedAnalyses PGOInstrumentationUse::run(Module &M,
                                              ModuleAnalysisManager &AM) {
 
@@ -1740,8 +1957,7 @@ static std::string getSimpleNodeName(const BasicBlock *Node) {
 }
 
 void llvm::setProfMetadata(Module *M, Instruction *TI,
-                           ArrayRef<uint64_t> EdgeCounts,
-                           uint64_t MaxCount) {
+                           ArrayRef<uint64_t> EdgeCounts, uint64_t MaxCount) {
   MDBuilder MDB(M->getContext());
   assert(MaxCount > 0 && "Bad max count");
   uint64_t Scale = calculateCountScale(MaxCount);

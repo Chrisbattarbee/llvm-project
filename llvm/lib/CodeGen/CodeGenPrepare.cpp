@@ -5987,8 +5987,24 @@ static bool isFormingBranchFromSelectProfitable(const TargetTransformInfo *TTI,
     uint64_t Sum = TrueWeight + FalseWeight;
     if (Sum != 0) {
       auto Probability = BranchProbability::getBranchProbability(Max, Sum);
-      if (Probability > TLI->getPredictableBranchThreshold())
+      if (Probability > TLI->getPredictableBranchThreshold()) {
+        dbgs() << "Converting " << *SI
+               << " into branch because of standard branch probabilities.\n";
         return true;
+      }
+    }
+  }
+
+  // Clusteredness
+  dbgs() << "here\n";
+  if (SI->getMetadata(LLVMContext::MD_Clusteredness)) {
+    uint64_t SameClusteredness = mdconst::dyn_extract<ConstantInt>(SI->getMetadata(LLVMContext::MD_Clusteredness)->getOperand(1))->getZExtValue();
+    uint64_t NotSameClusteredness = mdconst::dyn_extract<ConstantInt>(SI->getMetadata(LLVMContext::MD_Clusteredness)->getOperand(2))->getZExtValue();
+    float ratio = ((float)SameClusteredness) / ((float)(SameClusteredness + NotSameClusteredness));
+    // TODO EXPERIMENT WITH THIS
+    if (ratio > 0.9) {
+      dbgs() << "Converting " << *SI << " into branch because of clusteredness.\n";
+      return true;
     }
   }
 
@@ -6066,9 +6082,12 @@ bool CodeGenPrepare::optimizeShiftInst(BinaryOperator *Shift) {
 /// turn it into a branch.
 bool CodeGenPrepare::optimizeSelectInst(SelectInst *SI) {
   // If branch conversion isn't desirable, exit early.
+  dbgs() << "Attempting to optimize select " << *SI << "\n";
   if (DisableSelectToBranch || OptSize ||
-      llvm::shouldOptimizeForSize(SI->getParent(), PSI, BFI.get()))
+      llvm::shouldOptimizeForSize(SI->getParent(), PSI, BFI.get())) {
+    dbgs() << "Select " << *SI << " not changed to branch becase we are optmizing for size\n";
     return false;
+  }
 
   // Find all consecutive select instructions that share the same condition.
   SmallVector<SelectInst *, 2> ASI;
@@ -6091,8 +6110,11 @@ bool CodeGenPrepare::optimizeSelectInst(SelectInst *SI) {
   bool VectorCond = !SI->getCondition()->getType()->isIntegerTy(1);
 
   // Can we convert the 'select' to CF ?
-  if (VectorCond || SI->getMetadata(LLVMContext::MD_unpredictable))
+  if (VectorCond || SI->getMetadata(LLVMContext::MD_unpredictable)) {
+    dbgs() << "Select " << *SI
+           << "is labelled as unpredictable, not changing\n";
     return false;
+  }
 
   TargetLowering::SelectSupportKind SelectKind;
   if (VectorCond)
@@ -6103,8 +6125,11 @@ bool CodeGenPrepare::optimizeSelectInst(SelectInst *SI) {
     SelectKind = TargetLowering::ScalarValSelect;
 
   if (TLI->isSelectSupported(SelectKind) &&
-      !isFormingBranchFromSelectProfitable(TTI, TLI, SI))
+      !isFormingBranchFromSelectProfitable(TTI, TLI, SI)) {
+    dbgs() << "Select " << *SI << " did not pass profitable heuristics\n";
     return false;
+  }
+  dbgs() << "Select " << *SI << " passed profitable heuristics\n";
 
   // The DominatorTree needs to be rebuilt by any consumers after this
   // transformation. We simply reset here rather than setting the ModifiedDT

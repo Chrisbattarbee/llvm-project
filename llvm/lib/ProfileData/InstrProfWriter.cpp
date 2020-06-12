@@ -124,6 +124,10 @@ public:
       M += sizeof(uint64_t); // The function hash
       M += sizeof(uint64_t); // The size of the Counts vector
       M += ProfRecord.Counts.size() * sizeof(uint64_t);
+      M += sizeof(uint64_t); // The size of the SameCounts vector
+      M += ProfRecord.ClusterednessSameCounts.size() * sizeof(uint64_t);
+      M += sizeof(uint64_t); // The size of the NotSameCounts vector
+      M += ProfRecord.ClusterednessNotSameCounts.size() * sizeof(uint64_t);
 
       // Value data
       M += ValueProfData::getSize(ProfileData.second);
@@ -151,6 +155,12 @@ public:
       LE.write<uint64_t>(ProfileData.first); // Function hash
       LE.write<uint64_t>(ProfRecord.Counts.size());
       for (uint64_t I : ProfRecord.Counts)
+        LE.write<uint64_t>(I);
+      LE.write<uint64_t>(ProfRecord.ClusterednessSameCounts.size());
+      for (uint64_t I : ProfRecord.ClusterednessSameCounts)
+        LE.write<uint64_t>(I);
+      LE.write<uint64_t>(ProfRecord.ClusterednessNotSameCounts.size());
+      for (uint64_t I : ProfRecord.ClusterednessNotSameCounts)
         LE.write<uint64_t>(I);
 
       // Write value data
@@ -262,6 +272,10 @@ bool InstrProfWriter::shouldEncodeData(const ProfilingData &PD) {
   for (const auto &Func : PD) {
     const InstrProfRecord &IPR = Func.second;
     if (llvm::any_of(IPR.Counts, [](uint64_t Count) { return Count > 0; }))
+      return true;
+    if (llvm::any_of(IPR.ClusterednessSameCounts, [](uint64_t Count) { return Count > 0; }))
+      return true;
+    if (llvm::any_of(IPR.ClusterednessNotSameCounts, [](uint64_t Count) { return Count > 0; }))
       return true;
   }
   return false;
@@ -405,6 +419,16 @@ void InstrProfWriter::writeRecordInText(StringRef Name, uint64_t Hash,
   OS << "# Counter Values:\n";
   for (uint64_t Count : Func.Counts)
     OS << Count << "\n";
+
+  OS << "# Num Same Clusteredness Counters:\n" << Func.ClusterednessSameCounts.size() << "\n";
+  OS << "# Clusteredness Same Values:\n";
+  for (uint64_t ClusterednessSameCount : Func.ClusterednessSameCounts)
+    OS << ClusterednessSameCount << "\n";
+
+  OS << "# Num Not Same Clusteredness Counters:\n" << Func.ClusterednessNotSameCounts.size() << "\n";
+  OS << "# Clusteredness Not Same Values:\n";
+  for (uint64_t ClusterednessNotSameCount : Func.ClusterednessNotSameCounts)
+    OS << ClusterednessNotSameCount << "\n";
 
   uint32_t NumValueKinds = Func.getNumValueKinds();
   if (!NumValueKinds) {

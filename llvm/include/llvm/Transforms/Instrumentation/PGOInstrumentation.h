@@ -19,6 +19,7 @@
 #include "llvm/IR/PassManager.h"
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 
 namespace llvm {
 
@@ -38,7 +39,6 @@ public:
   PGOInstrumentationGenCreateVar(std::string CSInstrName = "")
       : CSInstrName(CSInstrName) {}
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
-
 private:
   std::string CSInstrName;
 };
@@ -48,6 +48,7 @@ class PGOInstrumentationGen : public PassInfoMixin<PGOInstrumentationGen> {
 public:
   PGOInstrumentationGen(bool IsCS = false) : IsCS(IsCS) {}
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static bool IsEnabled;
 
 private:
   // If this is a context sensitive instrumentation.
@@ -61,6 +62,16 @@ public:
                         std::string RemappingFilename = "", bool IsCS = false);
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+
+  // TODO: This is a filthy dirty hack, remove as soon as possible
+  struct CountsHolder {
+    uint64_t CountFromProfile;
+    uint64_t ClusterednessSameCountFromProfile;
+    uint64_t ClusterednessNotSameCountFromProfile;
+  };
+
+  static std::unordered_map<BasicBlock*, CountsHolder*>* CountsMap;
+  static bool IsEnabled;
 
 private:
   std::string ProfileFileName;

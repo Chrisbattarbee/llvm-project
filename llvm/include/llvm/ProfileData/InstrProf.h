@@ -87,6 +87,18 @@ inline StringRef getInstrProfDataVarPrefix() { return "__profd_"; }
 /// Return the name prefix of profile counter variables.
 inline StringRef getInstrProfCountersVarPrefix() { return "__profc_"; }
 
+/// Return the name prefix of profile  variables.
+inline StringRef getClusterednessLastIdCountersVarPrefix() { return "__clus_lid_"; }
+
+/// Return the name prefix of profile  variables.
+inline StringRef getCurrentBBCounterVarPrefix() { return "__current_bb_"; }
+
+/// Return the name prefix of profile counter variables.
+inline StringRef getClusterednessSameCountersVarPrefix() { return "__clus_same_"; }
+
+/// Return the name prefix of profile counter variables.
+inline StringRef getClusterednessNotSameCountersVarPrefix() { return "__clus_not_same_"; }
+
 /// Return the name prefix of value profile variables.
 inline StringRef getInstrProfValuesVarPrefix() { return "__profvp_"; }
 
@@ -688,18 +700,25 @@ struct InstrProfValueSiteRecord {
 /// Profiling information for a single function.
 struct InstrProfRecord {
   std::vector<uint64_t> Counts;
+  std::vector<uint64_t> ClusterednessSameCounts;
+  std::vector<uint64_t> ClusterednessNotSameCounts;
 
   InstrProfRecord() = default;
+  InstrProfRecord(std::vector<uint64_t> Counts, std::vector<uint64_t> SameCounts, std::vector<uint64_t> NotSameCounts) : Counts(std::move(Counts)), ClusterednessSameCounts(SameCounts), ClusterednessNotSameCounts(NotSameCounts) {}
   InstrProfRecord(std::vector<uint64_t> Counts) : Counts(std::move(Counts)) {}
   InstrProfRecord(InstrProfRecord &&) = default;
   InstrProfRecord(const InstrProfRecord &RHS)
       : Counts(RHS.Counts),
+        ClusterednessSameCounts(RHS.ClusterednessSameCounts),
+        ClusterednessNotSameCounts(RHS.ClusterednessNotSameCounts),
         ValueData(RHS.ValueData
                       ? std::make_unique<ValueProfData>(*RHS.ValueData)
                       : nullptr) {}
   InstrProfRecord &operator=(InstrProfRecord &&) = default;
   InstrProfRecord &operator=(const InstrProfRecord &RHS) {
     Counts = RHS.Counts;
+    ClusterednessSameCounts = RHS.ClusterednessSameCounts;
+    ClusterednessNotSameCounts = RHS.ClusterednessNotSameCounts;
     if (!RHS.ValueData) {
       ValueData = nullptr;
       return *this;
@@ -852,7 +871,15 @@ struct NamedInstrProfRecord : InstrProfRecord {
 
   NamedInstrProfRecord() = default;
   NamedInstrProfRecord(StringRef Name, uint64_t Hash,
-                       std::vector<uint64_t> Counts)
+                       std::vector<uint64_t> Counts,
+                       std::vector<uint64_t> SameCounts,
+                       std::vector<uint64_t> NotSameCounts
+                       )
+      : InstrProfRecord(std::move(Counts), std::move(SameCounts), std::move(NotSameCounts)), Name(Name), Hash(Hash) {}
+
+  NamedInstrProfRecord(StringRef Name, uint64_t Hash,
+                       std::vector<uint64_t> Counts
+  )
       : InstrProfRecord(std::move(Counts)), Name(Name), Hash(Hash) {}
 
   static bool hasCSFlagInHash(uint64_t FuncHash) {

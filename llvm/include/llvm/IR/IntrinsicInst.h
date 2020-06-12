@@ -38,6 +38,8 @@
 
 namespace llvm {
 
+
+
   /// A wrapper class for inspecting calls to intrinsic functions.
   /// This allows the standard isa/dyncast/cast functionality to work with calls
   /// to intrinsic functions.
@@ -843,6 +845,92 @@ namespace llvm {
 
     Value *getStep() const;
   };
+
+
+/// This represents the llvm.instrprof_increment intrinsic.
+class InstrProfClusterednessUpdate : public IntrinsicInst {
+public:
+  static bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::instrprof_clusteredness_update;
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  GlobalVariable *getName() const {
+    return cast<GlobalVariable>(
+        const_cast<Value *>(getArgOperand(0))->stripPointerCasts());
+  }
+
+  ConstantInt *getNumCounters() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(1)));
+  }
+
+  ConstantInt *getSelfIndex() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(2)));
+  }
+
+  ConstantInt *getHash() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(3)));
+  }
+};
+
+class InstrProfClusterednessUpdateSelect : public IntrinsicInst {
+public:
+  static bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::instrprof_clusteredness_update_select;
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  GlobalVariable *getName() const {
+    return cast<GlobalVariable>(
+        const_cast<Value *>(getArgOperand(0))->stripPointerCasts());
+  }
+
+  ConstantInt *getNumCounters() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(1)));
+  }
+
+  ConstantInt *getSelfIndex() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(2)));
+  }
+
+  ConstantInt *getHash() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(3)));
+  }
+
+  Value* getCondVal() const {
+    return cast<Value>(const_cast<Value *>(getArgOperand(4)));
+  }
+};
+
+
+
+/// This represents the llvm.instrprof_increment intrinsic.
+class InstrProfCurrentBBUpdate : public IntrinsicInst {
+public:
+  static bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::instrprof_current_bb_update;
+  }
+  static bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+
+  GlobalVariable *getName() const {
+    return cast<GlobalVariable>(
+        const_cast<Value *>(getArgOperand(0))->stripPointerCasts());
+  }
+
+  ConstantInt *getBBLabel() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(1)));
+  }
+
+  ConstantInt *getHash() const {
+    return cast<ConstantInt>(const_cast<Value *>(getArgOperand(2)));
+  }
+};
 
   class InstrProfIncrementInstStep : public InstrProfIncrementInst {
   public:

@@ -71,12 +71,18 @@
 #endif
 INSTR_PROF_DATA(const uint64_t, llvm::Type::getInt64Ty(Ctx), NameRef, \
                 ConstantInt::get(llvm::Type::getInt64Ty(Ctx), \
-                IndexedInstrProf::ComputeHash(getPGOFuncNameVarInitializer(Inc->getName()))))
+                IndexedInstrProf::ComputeHash(getPGOFuncNameVarInitializer(Instr->getName()))))
 INSTR_PROF_DATA(const uint64_t, llvm::Type::getInt64Ty(Ctx), FuncHash, \
                 ConstantInt::get(llvm::Type::getInt64Ty(Ctx), \
-                Inc->getHash()->getZExtValue()))
+                Instr->getHash()->getZExtValue()))
 INSTR_PROF_DATA(const IntPtrT, llvm::Type::getInt64PtrTy(Ctx), CounterPtr, \
                 ConstantExpr::getBitCast(CounterPtr, \
+                llvm::Type::getInt64PtrTy(Ctx)))
+INSTR_PROF_DATA(const IntPtrT, llvm::Type::getInt64PtrTy(Ctx), SameCounterPtr, \
+                ConstantExpr::getBitCast(SameCounterPtr, \
+                llvm::Type::getInt64PtrTy(Ctx)))
+INSTR_PROF_DATA(const IntPtrT, llvm::Type::getInt64PtrTy(Ctx), NotSameCounterPtr, \
+                ConstantExpr::getBitCast(NotSameCounterPtr, \
                 llvm::Type::getInt64PtrTy(Ctx)))
 /* This is used to map function pointers for the indirect call targets to
  * function name hashes during the conversion from raw to merged profile
@@ -88,6 +94,10 @@ INSTR_PROF_DATA(IntPtrT, llvm::Type::getInt8PtrTy(Ctx), Values, \
                 ValuesPtrExpr)
 INSTR_PROF_DATA(const uint32_t, llvm::Type::getInt32Ty(Ctx), NumCounters, \
                 ConstantInt::get(llvm::Type::getInt32Ty(Ctx), NumCounters))
+INSTR_PROF_DATA(const uint32_t, llvm::Type::getInt32Ty(Ctx), NumSameCounters, \
+                ConstantInt::get(llvm::Type::getInt32Ty(Ctx), NumSameCounters))
+INSTR_PROF_DATA(const uint32_t, llvm::Type::getInt32Ty(Ctx), NumNotSameCounters, \
+                ConstantInt::get(llvm::Type::getInt32Ty(Ctx), NumNotSameCounters))
 INSTR_PROF_DATA(const uint16_t, Int16ArrayTy, NumValueSites[IPVK_Last+1], \
                 ConstantArray::get(Int16ArrayTy, Int16ArrayVals))
 #undef INSTR_PROF_DATA
@@ -254,6 +264,15 @@ INSTR_PROF_SECT_ENTRY(IPSK_data, \
                       INSTR_PROF_DATA_COFF, "__DATA,")
 INSTR_PROF_SECT_ENTRY(IPSK_cnts, \
                       INSTR_PROF_QUOTE(INSTR_PROF_CNTS_COMMON), \
+                      INSTR_PROF_CNTS_COFF, "__DATA,")
+INSTR_PROF_SECT_ENTRY(IPSK_clus_last_id, \
+                      INSTR_PROF_QUOTE(INSTR_PROF_CLUS_LASTID_COMMON), \
+                      INSTR_PROF_CNTS_COFF, "__DATA,")
+INSTR_PROF_SECT_ENTRY(IPSK_clus_same, \
+                      INSTR_PROF_QUOTE(INSTR_PROF_CLUS_SAME_COMMON), \
+                      INSTR_PROF_CNTS_COFF, "__DATA,")
+INSTR_PROF_SECT_ENTRY(IPSK_clus_notsame, \
+                      INSTR_PROF_QUOTE(INSTR_PROF_CLUS_NOTSAME_COMMON), \
                       INSTR_PROF_CNTS_COFF, "__DATA,")
 INSTR_PROF_SECT_ENTRY(IPSK_name, \
                       INSTR_PROF_QUOTE(INSTR_PROF_NAME_COMMON), \
